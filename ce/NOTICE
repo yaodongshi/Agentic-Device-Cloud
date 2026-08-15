@@ -1,0 +1,6 @@
+ADC Community Edition (ce/)
+Copyright 2026 ADC Project Contributors
+Licensed under GNU LGPL-3.0 (see LICENSE in this directory).
+
+含第三方组件：gorilla/websocket (BSD-3)、pgx (MIT)、go-redis (BSD-2)、jackc (MIT)、
+golang.org/x/* (BSD-3)。完整依赖清单见 go.mod 与 CI 生成的 SBOM。
