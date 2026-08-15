@@ -69,6 +69,7 @@ func (d DSN) String() string {
 // （SEC-06，由 design/60 落地），代码只读取注入的凭据，不管理 ACL。
 type ValkeyConfig struct {
 	Addr     string
+	Username string
 	Password string
 	DB       int
 }
@@ -89,7 +90,7 @@ func Load() (*Config, error) {
 		IdleTimeoutSec:     getEnvInt("ADC_HTTP_IDLE_TIMEOUT_SEC", 60),
 		MaxBodyBytes:       getEnvInt64("ADC_HTTP_MAX_BODY_BYTES", 1<<20),
 		Postgres:           DSN{Host: getEnv("PG_HOST", "127.0.0.1"), Port: getEnvInt("PG_PORT", 5432), User: getEnv("PG_USER", "adc"), Password: getEnv("PG_PASSWORD", ""), DBName: getEnv("PG_DBNAME", "adc"), SSLMode: getEnv("PG_SSLMODE", "disable")},
-		Valkey:             ValkeyConfig{Addr: getEnv("VALKEY_ADDR", "127.0.0.1:6379"), Password: getEnv("VALKEY_PASSWORD", ""), DB: getEnvInt("VALKEY_DB", 0)},
+		Valkey:           ValkeyConfig{Addr: getEnv("VALKEY_ADDR", "127.0.0.1:6379"), Username: getEnv("VALKEY_USERNAME", ""), Password: getEnv("VALKEY_PASSWORD", ""), DB: getEnvInt("VALKEY_DB", 0)},
 		WeComWebhookURL:    getEnv("ADC_WECOM_WEBHOOK", ""),
 		DingTalkWebhook:    getEnv("ADC_DINGTALK_WEBHOOK", ""),
 		HITLTimeoutSec:     getEnvInt("ADC_HITL_TIMEOUT_SEC", 300),

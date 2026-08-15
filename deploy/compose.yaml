@@ -204,6 +204,20 @@ services:
       retries: 12
     networks: [adc-net]
 
+  console:
+    build:
+      context: ..
+      dockerfile: Dockerfile.console
+    image: adc/console:dev
+    container_name: adc-console
+    restart: unless-stopped
+    ports:
+      - "18080:80"
+    depends_on:
+      gateway:
+        condition: service_healthy
+    networks: [adc-net]
+
   gateway:
     build:
       context: ..
@@ -226,7 +240,7 @@ services:
       # B-09：/metrics 独立内网监听（不暴露在业务入口端口上）
       ADC_METRICS_ADDR: ":9091"
     ports:
-      - "18080:8080"
+      # 业务端口不再对外：统一入口为 console(nginx) -> gateway
       # 指标抓取目标仅回环（内网），供宿主 Prometheus 采集
       - "127.0.0.1:19091:9091"
     depends_on:

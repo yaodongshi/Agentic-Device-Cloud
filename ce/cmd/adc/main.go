@@ -61,7 +61,7 @@ func main() {
 	}
 	defer pool.Close()
 
-	rdb := redis.NewClient(&redis.Options{Addr: cfg.Valkey.Addr, Password: cfg.Valkey.Password, DB: cfg.Valkey.DB})
+	rdb := redis.NewClient(&redis.Options{Addr: cfg.Valkey.Addr, Username: cfg.Valkey.Username, Password: cfg.Valkey.Password, DB: cfg.Valkey.DB})
 	defer rdb.Close()
 
 	// --- device auth (SEC-03) ---
@@ -70,7 +70,7 @@ func main() {
 		fatal(fmt.Errorf("ADC_DEVICE_KEK required (64 hex chars): %w", err))
 	}
 	credRepo := auth.NewCredentialRepo(pool.Pool, kek)
-	nonces := auth.NewValkeyNonceStore(&redis.Options{Addr: cfg.Valkey.Addr, Password: cfg.Valkey.Password, DB: cfg.Valkey.DB})
+	nonces := auth.NewValkeyNonceStore(&redis.Options{Addr: cfg.Valkey.Addr, Username: cfg.Valkey.Username, Password: cfg.Valkey.Password, DB: cfg.Valkey.DB})
 	verifier := auth.NewVerifier(credRepo, nonces)
 
 	if seed {
