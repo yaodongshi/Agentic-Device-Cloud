@@ -14,6 +14,17 @@ type JSONRPCRequest struct {
 	ID      string      `json:"id"`
 	Method  string      `json:"method"`
 	Params  interface{} `json:"params,omitempty"`
+	// Version is the wire protocol version (GAP-06). Absent means 1.0.
+	Version string `json:"version,omitempty"`
+}
+
+// EffectiveVersion returns the protocol version of the request, defaulting
+// to ProtocolVersion when the field is absent (backward compatibility).
+func (r JSONRPCRequest) EffectiveVersion() string {
+	if r.Version == "" {
+		return ProtocolVersion
+	}
+	return r.Version
 }
 
 type JSONRPCResponse struct {
@@ -42,6 +53,40 @@ const (
 	ErrInvalidArg = -32602
 	ErrInternal   = -32603
 )
+
+// Protocol version negotiation (GAP-06)
+
+// ProtocolVersion is the wire protocol version this SDK speaks. Requests or
+// handshakes without a "version"/"protocolVersion" field are treated as 1.0
+// for backward compatibility.
+const ProtocolVersion = "1.0"
+
+// ErrVersionUnsupported is returned when a peer advertises a protocol
+// version this SDK cannot speak. JSON-RPC 2.0 reserves the -32000..-32099
+// range for implementation-defined server errors.
+const ErrVersionUnsupported = -32001
+
+// NegotiateVersion validates the version advertised by a peer. An empty
+// version is treated as 1.0 (backward compatibility); any other value is
+// rejected with ErrVersionUnsupported.
+func NegotiateVersion(version string) *JSONRPCError {
+	if version == "" || version == ProtocolVersion {
+		return nil
+	}
+	return &JSONRPCError{
+		Code:    ErrVersionUnsupported,
+		Message: "unsupported protocol version: " + version,
+	}
+}
+
+// Handshake is the connection-opening message a device sends after the
+// transport is established (GAP-06). The server accepts it (optionally
+// replying with the negotiated version) or rejects it with a JSON-RPC error
+// whose code is ErrVersionUnsupported.
+type Handshake struct {
+	ProtocolVersion string   `json:"protocolVersion"`
+	Capabilities    []string `json:"capabilities,omitempty"`
+}
 
 // MCP 工具定义
 

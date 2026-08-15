@@ -17,13 +17,17 @@ from pydantic import BaseModel
 class WireModel(BaseModel):
     """Base class reproducing Go encoding/json omitempty behaviour on dump.
 
-    Go omits nil pointers, nil maps/interfaces and empty omitempty strings.
-    Python models mirror this by excluding None values and any optional string
-    fields listed in ``_omitempty_str_fields`` when their value is "".
+    Go omits nil pointers, nil maps/interfaces, empty omitempty strings and
+    empty omitempty slices. Python models mirror this by excluding None
+    values, any optional string fields listed in ``_omitempty_str_fields``
+    when their value is "" and any list fields listed in
+    ``_omitempty_list_fields`` when their value is empty.
     """
 
     #: Optional string fields that Go marshals with omitempty.
     _omitempty_str_fields: tuple[str, ...] = ()
+    #: Optional list fields that Go marshals with omitempty (len == 0).
+    _omitempty_list_fields: tuple[str, ...] = ()
 
     def to_wire_dict(self) -> dict[str, Any]:
         """Return the wire-compatible dict with Go omitempty semantics applied."""
@@ -40,6 +44,12 @@ class WireModel(BaseModel):
             if value is None:
                 continue
             if field_name in self._omitempty_str_fields and value == "":
+                continue
+            if (
+                field_name in self._omitempty_list_fields
+                and isinstance(value, list)
+                and len(value) == 0
+            ):
                 continue
             data[field_name] = value
         return data
@@ -68,6 +78,15 @@ class JSONRPCRequest(WireModel):
     id: str
     method: str
     params: Any | None = None
+    #: Wire protocol version (GAP-06); absent means 1.0.
+    version: str | None = None
+
+    _omitempty_str_fields = ("version",)
+
+    @property
+    def effective_version(self) -> str:
+        """Return the request version, defaulting to 1.0 when absent."""
+        return self.version or PROTOCOL_VERSION
 
 
 class JSONRPCResponse(WireModel):
@@ -83,6 +102,41 @@ ERR_INVALID_REQUEST = -32600
 ERR_METHOD_NOT_FOUND = -32601
 ERR_INVALID_PARAMS = -32602
 ERR_INTERNAL = -32603
+
+# ---------------------------------------------------------------------------
+# Protocol version negotiation (GAP-06, identical to protocol.go)
+# ---------------------------------------------------------------------------
+
+#: Wire protocol version this SDK speaks; requests or handshakes without a
+#: "version"/"protocolVersion" field are treated as 1.0.
+PROTOCOL_VERSION = "1.0"
+
+#: Returned when a peer advertises a protocol version we cannot speak.
+#: JSON-RPC 2.0 reserves the -32000..-32099 range for server-defined errors.
+ERR_VERSION_UNSUPPORTED = -32001
+
+
+def negotiate_version(version: str | None) -> JSONRPCError | None:
+    """Validate a peer-advertised version; empty/None means 1.0 (backward compat).
+
+    Mirrors NegotiateVersion in protocol.go: any value other than "" and
+    PROTOCOL_VERSION yields an error with code ERR_VERSION_UNSUPPORTED.
+    """
+    if version is None or version == "" or version == PROTOCOL_VERSION:
+        return None
+    return JSONRPCError(
+        code=ERR_VERSION_UNSUPPORTED,
+        message=f"unsupported protocol version: {version}",
+    )
+
+
+class Handshake(WireModel):
+    """Connection-opening message a device sends after transport setup (GAP-06)."""
+
+    protocolVersion: str
+    capabilities: list[str] | None = None
+
+    _omitempty_list_fields = ("capabilities",)
 
 # ---------------------------------------------------------------------------
 # MCP tool definitions
@@ -137,3 +191,13 @@ class ToolCallResult(WireModel):
 
 METHOD_TOOLS_LIST = "tools/list"
 METHOD_TOOLS_CALL = "tools/call"
+
+# ---------------------------------------------------------------------------
+# Device-plane auth handshake constants (SEC-03, identical to protocol.go)
+# ---------------------------------------------------------------------------
+
+HEADER_X_DEVICE_ID = "X-Device-ID"
+HEADER_X_DEVICE_TIMESTAMP = "X-Device-Timestamp"
+HEADER_X_DEVICE_NONCE = "X-Device-Nonce"
+HEADER_X_DEVICE_SIGNATURE = "X-Device-Signature"
+AUTH_TIME_WINDOW_SEC = 300

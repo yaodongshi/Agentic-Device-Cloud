@@ -1,0 +1,31 @@
+// Design tokens from design/20 (色彩/间距). Colors: brand blue, functional
+// colors separated from risk colors; 4/8 spacing base.
+:root {
+  --adc-brand: #2563eb;
+  --adc-brand-light: #3b82f6;
+  --adc-success: #16a34a;
+  --adc-warning: #d97706;
+  --adc-danger: #dc2626;
+  --adc-info: #0891b2;
+  --adc-text: #1f2937;
+  --adc-text-secondary: #6b7280;
+  --adc-border: #e5e7eb;
+  --adc-bg: #f9fafb;
+  --adc-risk-0: #16a34a;
+  --adc-risk-1: #2563eb;
+  --adc-risk-2: #d97706;
+  --adc-risk-3: #dc2626;
+  --adc-space-1: 4px;
+  --adc-space-2: 8px;
+  --adc-space-3: 12px;
+  --adc-space-4: 16px;
+  --adc-space-6: 24px;
+  --adc-radius: 6px;
+}
+
+body {
+  margin: 0;
+  font-family: 'Helvetica Neue', Helvetica, 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  color: var(--adc-text);
+  background: var(--adc-bg);
+}
