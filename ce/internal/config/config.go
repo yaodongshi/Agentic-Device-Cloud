@@ -9,11 +9,11 @@ import (
 )
 
 type Config struct {
-	Env        string
-	LogLevel   string
-	HTTPAddr   string // 服务监听地址，如 :8080
-	NodeID     string
-	PublicURL  string // 对外访问地址（回调签名与落地页用）
+	Env       string
+	LogLevel  string
+	HTTPAddr  string // 服务监听地址，如 :8080
+	NodeID    string
+	PublicURL string // 对外访问地址（回调签名与落地页用）
 
 	// TLS 终结配置（SEC-05）：证书与私钥经环境变量注入，仅挂载于边缘节点
 	//（统一 API 网关）；部署细节见 design/60。
@@ -33,10 +33,17 @@ type Config struct {
 	Postgres DSN
 	Valkey   ValkeyConfig
 
-	WeComWebhookURL  string
-	DingTalkWebhook  string
-	HITLTimeoutSec   int
-	HITLCallbackKey  string // 回调签名密钥（环境变量注入）
+	WeComWebhookURL string
+	DingTalkWebhook string
+	HITLTimeoutSec  int
+	HITLCallbackKey string // 回调签名密钥（环境变量注入）
+
+	// NodeKey 为跨节点集群签名密钥（SEC-06）：HMAC-SHA256 共享密钥，hex 编码，
+	// 经 ADC_NODE_KEY 注入；空值时仅 dev 环境回退到开发用固定密钥。
+	NodeKey string
+	// ToolCallTimeoutSec 为工具调用超时（design/31 3.2.6），
+	// ADC_TOOL_CALL_TIMEOUT_SEC 注入，默认 15。
+	ToolCallTimeoutSec int
 
 	DeviceTTLSeconds int
 	// WSS Origin 白名单（SEC-04），逗号分隔，经 ADC_WS_ALLOWED_ORIGINS 注入；
@@ -59,7 +66,7 @@ func (d DSN) String() string {
 }
 
 // ValkeyConfig 仅承载连接凭据。Valkey ACL 最小权限与通道 TLS 属部署层配置
-//（SEC-06，由 design/60 落地），代码只读取注入的凭据，不管理 ACL。
+// （SEC-06，由 design/60 落地），代码只读取注入的凭据，不管理 ACL。
 type ValkeyConfig struct {
 	Addr     string
 	Password string
@@ -69,26 +76,28 @@ type ValkeyConfig struct {
 // Load 从环境变量读取配置；缺失必填项返回错误，避免静默使用不安全默认值。
 func Load() (*Config, error) {
 	c := &Config{
-		Env:              getEnv("ADC_ENV", "dev"),
-		LogLevel:         getEnv("ADC_LOG_LEVEL", "info"),
-		HTTPAddr:         getEnv("ADC_HTTP_ADDR", ":8080"),
-		NodeID:           getEnv("ADC_NODE_ID", "adc-node-01"),
-		PublicURL:        getEnv("ADC_PUBLIC_URL", "http://localhost:8080"),
-		TLSEnable:        getEnvBool("ADC_TLS_ENABLE", false),
-		TLSCertFile:      getEnv("ADC_TLS_CERT", ""),
-		TLSKeyFile:       getEnv("ADC_TLS_KEY", ""),
-		ReadTimeoutSec:   getEnvInt("ADC_HTTP_READ_TIMEOUT_SEC", 10),
-		WriteTimeoutSec:  getEnvInt("ADC_HTTP_WRITE_TIMEOUT_SEC", 30),
-		IdleTimeoutSec:   getEnvInt("ADC_HTTP_IDLE_TIMEOUT_SEC", 60),
-		MaxBodyBytes:     getEnvInt64("ADC_HTTP_MAX_BODY_BYTES", 1<<20),
-		Postgres:         DSN{Host: getEnv("PG_HOST", "127.0.0.1"), Port: getEnvInt("PG_PORT", 5432), User: getEnv("PG_USER", "adc"), Password: getEnv("PG_PASSWORD", ""), DBName: getEnv("PG_DBNAME", "adc"), SSLMode: getEnv("PG_SSLMODE", "disable")},
-		Valkey:           ValkeyConfig{Addr: getEnv("VALKEY_ADDR", "127.0.0.1:6379"), Password: getEnv("VALKEY_PASSWORD", ""), DB: getEnvInt("VALKEY_DB", 0)},
-		WeComWebhookURL:  getEnv("ADC_WECOM_WEBHOOK", ""),
-		DingTalkWebhook:  getEnv("ADC_DINGTALK_WEBHOOK", ""),
-		HITLTimeoutSec:   getEnvInt("ADC_HITL_TIMEOUT_SEC", 300),
-		HITLCallbackKey:  getEnv("ADC_HITL_CALLBACK_KEY", ""),
-		DeviceTTLSeconds: getEnvInt("ADC_DEVICE_TTL_SEC", 90),
-		AllowedOrigins:   getEnvList("ADC_WS_ALLOWED_ORIGINS"),
+		Env:                getEnv("ADC_ENV", "dev"),
+		LogLevel:           getEnv("ADC_LOG_LEVEL", "info"),
+		HTTPAddr:           getEnv("ADC_HTTP_ADDR", ":8080"),
+		NodeID:             getEnv("ADC_NODE_ID", "adc-node-01"),
+		PublicURL:          getEnv("ADC_PUBLIC_URL", "http://localhost:8080"),
+		TLSEnable:          getEnvBool("ADC_TLS_ENABLE", false),
+		TLSCertFile:        getEnv("ADC_TLS_CERT", ""),
+		TLSKeyFile:         getEnv("ADC_TLS_KEY", ""),
+		ReadTimeoutSec:     getEnvInt("ADC_HTTP_READ_TIMEOUT_SEC", 10),
+		WriteTimeoutSec:    getEnvInt("ADC_HTTP_WRITE_TIMEOUT_SEC", 30),
+		IdleTimeoutSec:     getEnvInt("ADC_HTTP_IDLE_TIMEOUT_SEC", 60),
+		MaxBodyBytes:       getEnvInt64("ADC_HTTP_MAX_BODY_BYTES", 1<<20),
+		Postgres:           DSN{Host: getEnv("PG_HOST", "127.0.0.1"), Port: getEnvInt("PG_PORT", 5432), User: getEnv("PG_USER", "adc"), Password: getEnv("PG_PASSWORD", ""), DBName: getEnv("PG_DBNAME", "adc"), SSLMode: getEnv("PG_SSLMODE", "disable")},
+		Valkey:             ValkeyConfig{Addr: getEnv("VALKEY_ADDR", "127.0.0.1:6379"), Password: getEnv("VALKEY_PASSWORD", ""), DB: getEnvInt("VALKEY_DB", 0)},
+		WeComWebhookURL:    getEnv("ADC_WECOM_WEBHOOK", ""),
+		DingTalkWebhook:    getEnv("ADC_DINGTALK_WEBHOOK", ""),
+		HITLTimeoutSec:     getEnvInt("ADC_HITL_TIMEOUT_SEC", 300),
+		HITLCallbackKey:    getEnv("ADC_HITL_CALLBACK_KEY", ""),
+		NodeKey:            getEnv("ADC_NODE_KEY", ""),
+		ToolCallTimeoutSec: getEnvInt("ADC_TOOL_CALL_TIMEOUT_SEC", 15),
+		DeviceTTLSeconds:   getEnvInt("ADC_DEVICE_TTL_SEC", 90),
+		AllowedOrigins:     getEnvList("ADC_WS_ALLOWED_ORIGINS"),
 	}
 
 	if c.Postgres.Password == "" {
@@ -99,6 +108,9 @@ func Load() (*Config, error) {
 	}
 	if c.TLSEnable && (c.TLSCertFile == "" || c.TLSKeyFile == "") {
 		return nil, fmt.Errorf("config: ADC_TLS_ENABLE requires ADC_TLS_CERT and ADC_TLS_KEY (SEC-05)")
+	}
+	if c.ToolCallTimeoutSec < 1 {
+		return nil, fmt.Errorf("config: ADC_TOOL_CALL_TIMEOUT_SEC must be at least 1 (design/31 3.2.6)")
 	}
 	if c.ReadTimeoutSec < 0 || c.WriteTimeoutSec < 0 || c.IdleTimeoutSec < 0 {
 		return nil, fmt.Errorf("config: HTTP timeouts must not be negative (SEC-19)")

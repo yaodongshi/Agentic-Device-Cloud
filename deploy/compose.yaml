@@ -35,11 +35,16 @@ services:
     image: valkey/valkey:8-alpine
     container_name: adc-valkey
     restart: unless-stopped
-    command: ["valkey-server", "--requirepass", "${ADC_VALKEY_PASSWORD:-adc_dev_only}"]
+    # SEC-06: ACL 落地——default 用户关闭，业务走专用 `adc` 用户
+    #（规则见 deploy/valkey-acl.conf，密码须与 ADC_VALKEY_PASSWORD 同步）。
+    # --requirepass 保留为兜底；TLS 端口为生产形态（design/60 7.1），dev 默认关闭。
+    command: ["valkey-server", "--requirepass", "${ADC_VALKEY_PASSWORD:-adc_dev_only}", "--aclfile", "/etc/valkey/acl.conf"]
     volumes:
       - adc_valkey_data:/data
+      - ./valkey-acl.conf:/etc/valkey/acl.conf:ro
     healthcheck:
-      test: ["CMD-SHELL", "valkey-cli -a $${ADC_VALKEY_PASSWORD:-adc_dev_only} ping | grep -q PONG"]
+      # ACL 下健康检查必须显式携带用户（default 已关闭，无用户 AUTH 会失败）
+      test: ["CMD-SHELL", "valkey-cli --user $${ADC_VALKEY_USERNAME:-adc} -a $${ADC_VALKEY_PASSWORD:-adc_dev_only} ping | grep -q PONG"]
       interval: 5s
       timeout: 3s
       retries: 12
@@ -68,7 +73,13 @@ services:
       PG_DBNAME: ${ADC_PG_DBNAME:-adc}
       PG_SSLMODE: disable
       VALKEY_ADDR: valkey:6379
+      # SEC-06：ACL 用户名 + 密码须与 deploy/valkey-acl.conf 中的 adc 用户同步
+      VALKEY_USERNAME: ${ADC_VALKEY_USERNAME:-adc}
       VALKEY_PASSWORD: ${ADC_VALKEY_PASSWORD:-adc_dev_only}
+      # SEC-05：TLS 终结（证书注入，dev 默认关闭；生产经 secrets 挂载，design/60 7.1）
+      ADC_TLS_ENABLE: ${ADC_TLS_ENABLE:-false}
+      ADC_TLS_CERT: ${ADC_TLS_CERT:-}
+      ADC_TLS_KEY: ${ADC_TLS_KEY:-}
     depends_on:
       postgres:
         condition: service_healthy
@@ -110,8 +121,16 @@ services:
       ADC_BACKEND_CONNECTOR: "http://adc:8080"
       ADC_BACKEND_APPROVAL: "http://adc:8080"
       ADC_BACKEND_PYAGENT: "http://py-agent:18081"
+      # SEC-05：TLS 终结（证书注入，dev 默认关闭；生产经 secrets 挂载，design/60 7.1）
+      ADC_TLS_ENABLE: ${ADC_TLS_ENABLE:-false}
+      ADC_TLS_CERT: ${ADC_TLS_CERT:-}
+      ADC_TLS_KEY: ${ADC_TLS_KEY:-}
+      # B-09：/metrics 独立内网监听（不暴露在业务入口端口上）
+      ADC_METRICS_ADDR: ":9091"
     ports:
       - "18080:8080"
+      # 指标抓取目标仅回环（内网），供宿主 Prometheus 采集
+      - "127.0.0.1:19091:9091"
     depends_on:
       adc:
         condition: service_healthy

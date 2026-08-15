@@ -1,0 +1,85 @@
+# ADC 告警规则初版（design/80 B-09 / A-07，design/60 6.3 告警规则表）
+#
+# 纪律：每条告警必须有 runbook 与归属人，无 runbook 的告警直接删除
+#（design/60 6.3）。本文件为种子规则，接入 Prometheus 后逐条补 runbook
+# 链接（annotation.runbook_url）。
+#
+# 指标来源：
+#   - 网关/gateway 与 adc 数据面服务的 /metrics（adc_http_requests_total、
+#     adc_device_online_total、adc_hitl_notify_failures_total、
+#     adc_pg_pool_connections）
+#   - 设备在线 Gauge 以 Valkey 在线集合 30s 对账为准（adc 服务采集）
+
+groups:
+  # ---- P1：立即呼叫 + 自动重启兜底 + 回滚评估 ----
+  - name: adc-p1
+    rules:
+      # 设备在线率骤降：5 分钟前基数下降超过 20%（design/80 A-06 验收口径；
+      # design/60 6.3 为 10 分钟 30%，V1.0 种子规则收紧到 5 分钟 20%）。
+      # offset 5m 依赖 Gauge 至少积攒 5 分钟历史，无历史时不触发（安全）。
+      - alert: ADCDeviceOnlineDrop
+        expr: |
+          (
+            max by (tenant) (adc_device_online_total offset 5m)
+            - max by (tenant) (adc_device_online_total)
+          ) / max by (tenant) (adc_device_online_total offset 5m) > 0.2
+        for: 1m
+        labels:
+          severity: p1
+        annotations:
+          summary: "设备在线数骤降（tenant {{ $labels.tenant }}）"
+          description: "在线设备 5 分钟内下降 {{ $value | humanizePercentage }}，检查设备接入链路与宿主机"
+
+      # 网关 5xx 比例：5 分钟窗口内 5xx 请求占比超过 5%
+      #（design/60 6.3 P2 后端依赖不可达、P1 网关异常的统一前端信号）。
+      # clamp_min 防止零流量除以零。
+      - alert: ADCGateway5xxRate
+        expr: |
+          sum(rate(adc_http_requests_total{code=~"5.."}[5m]))
+            /
+          clamp_min(sum(rate(adc_http_requests_total[5m])), 0.001) > 0.05
+        for: 5m
+        labels:
+          severity: p1
+        annotations:
+          summary: "网关 5xx 错误率超过 5%（5 分钟窗口）"
+          description: "当前 5xx 占比 {{ $value | humanizePercentage }}，按后端归因排查"
+
+      # 审批推送失败：5 分钟内累计失败 3 次及以上（"连续 3 次"的计数器
+      # 近似；精确连续判定待通知器状态机化后改用 Gauge）。
+      - alert: ADCHITLPushFailure
+        expr: increase(adc_hitl_notify_failures_total[5m]) >= 3
+        for: 1m
+        labels:
+          severity: p1
+        annotations:
+          summary: "审批卡片推送连续失败（channel {{ $labels.channel }}）"
+          description: "5 分钟内推送失败 {{ $value }} 次，SEC-18 降级链路触发，检查企微/钉钉 webhook"
+
+  # ---- P2：值班处理 ----
+  - name: adc-p2
+    rules:
+      # PostgreSQL 连接池水位：acquired/max 超过 80% 持续 5 分钟
+      #（单机 8C16G 上限 300 为假设基线，design/60 1.5 容量红线）。
+      - alert: ADCPGPoolHighWatermark
+        expr: |
+          adc_pg_pool_connections{state="acquired"}
+            /
+          adc_pg_pool_connections{state="max"} > 0.8
+        for: 5m
+        labels:
+          severity: p2
+        annotations:
+          summary: "PostgreSQL 连接池水位超过 80%"
+          description: "acquired/max = {{ $value | humanizePercentage }}，检查慢查询与连接泄漏"
+
+      # 限流触发率：429 速率持续大于等于 1 req/s（SEC-12 网关桶/租户配额
+      # 触发信号；V1.0 种子阈值，压测后校准）。
+      - alert: ADCRateLimitTriggerRate
+        expr: sum(rate(adc_http_requests_total{code="429"}[5m])) >= 1
+        for: 5m
+        labels:
+          severity: p2
+        annotations:
+          summary: "限流触发率持续升高"
+          description: "429 速率 {{ $value }} req/s，检查租户配额与网关限流桶（SEC-12）"
