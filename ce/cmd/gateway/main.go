@@ -27,12 +27,12 @@ func main() {
 			Approval:  getenv("ADC_BACKEND_APPROVAL", "http://adc:8080"),
 			PyAgent:   getenv("ADC_BACKEND_PYAGENT", "http://py-agent:18081"),
 		},
-		Version:             "0.1.0",
-		UpstreamTimeout:     45 * time.Second,
-		HealthProbeTimeout:  2 * time.Second,
-		ReadHeaderTimeout:   10 * time.Second,
-		IdleTimeout:         120 * time.Second,
-		ErrorLog:            slog.NewLogLogger(slog.NewTextHandler(os.Stderr, nil), slog.LevelError),
+		Version:            "0.1.0",
+		UpstreamTimeout:    45 * time.Second,
+		HealthProbeTimeout: 2 * time.Second,
+		ReadHeaderTimeout:  10 * time.Second,
+		IdleTimeout:        120 * time.Second,
+		ErrorLog:           slog.NewLogLogger(slog.NewTextHandler(os.Stderr, nil), slog.LevelError),
 	}
 
 	srv, err := gateway.New(cfg)

@@ -32,9 +32,12 @@ var testKEK = bytes.Repeat([]byte("k"), 32)
 func uuidOf(n int) string { return fmt.Sprintf("00000000-0000-4000-8000-%012d", n) }
 
 type memStore struct {
-	tenants *memTenantRepo
-	devices *memDeviceRepo
-	keys    *memApiKeyRepo
+	tenants   *memTenantRepo
+	devices   *memDeviceRepo
+	keys      *memApiKeyRepo
+	tools     *memToolRepo
+	auditLogs *memAuditQueryRepo
+	policies  *memPolicyRepo
 }
 
 func newMemStore() *memStore {
@@ -42,12 +45,18 @@ func newMemStore() *memStore {
 	s.tenants = newMemTenantRepo()
 	s.devices = newMemDeviceRepo(s.tenants)
 	s.keys = newMemApiKeyRepo(s.tenants)
+	s.tools = newMemToolRepo(s.devices)
+	s.auditLogs = newMemAuditQueryRepo()
+	s.policies = newMemPolicyRepo(s.tenants)
 	s.tenants.deviceCount = s.devices.count
 	s.tenants.keyCount = s.keys.count
 	now := func() time.Time { return fixedNow }
 	s.tenants.now = now
 	s.devices.now = now
 	s.keys.now = now
+	s.tools.now = now
+	s.auditLogs.now = now
+	s.policies.now = now
 	return s
 }
 
@@ -667,6 +676,7 @@ type testEnv struct {
 	store    *memStore
 	sessions *memSessions
 	audit    *memAudit
+	srv      *Server
 	handler  http.Handler
 }
 
@@ -677,9 +687,12 @@ func newTestEnv(t *testing.T) *testEnv {
 	aud := &memAudit{}
 	srv := NewServer(st.tenants, st.devices, st.keys, sess)
 	srv.Audit = aud
+	srv.Tools = st.tools
+	srv.AuditQuery = st.auditLogs
+	srv.Policies = st.policies
 	srv.KEK = testKEK
 	srv.Now = func() time.Time { return fixedNow }
-	return &testEnv{store: st, sessions: sess, audit: aud, handler: srv.Handler()}
+	return &testEnv{store: st, sessions: sess, audit: aud, srv: srv, handler: srv.Handler()}
 }
 
 // token issues a session for the given roles and tenant, returning the

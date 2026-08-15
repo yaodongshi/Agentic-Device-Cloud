@@ -1,7 +1,9 @@
 // Package adminapi implements the Admin API control plane (design/31 LLD
-// 3.4, design/33 3.1, design/80 B-02/B-03/B-05): tenant CRUD with quota,
-// the device ledger with one-shot credential issuance, and Agent API key
-// lifecycle management. Requests are authenticated by session
+// 3.4, design/33 3.1, design/80 B-02/B-03/B-04/B-05/B-06): tenant CRUD
+// with quota, the device ledger with one-shot credential issuance, Agent
+// API key lifecycle management, tool risk level configuration (FR-006),
+// the V1 single-level approval policy (FR-007) and the audit log query /
+// export surface (FR-013). Requests are authenticated by session
 // (adminauth.Authorize) and gated by the admin RBAC matrix
 // (adminauth.RequireRole); the tenant context always derives from the
 // session record, never from request headers (SEC-02 / GAP-13).
@@ -29,21 +31,24 @@ import (
 // agentauth, codes travel as strings on the wire; the HTTP status controls
 // transport semantics and the code carries the business semantics.
 const (
-	codeBadRequest       = "10001"
-	codeUnauthorized     = "10002"
-	codeForbidden        = "10003"
-	codeNotFound         = "10004"
-	codeConflict         = "10005"
-	codeInternal         = "10007"
-	codeDeviceNotFound   = "11001"
-	codeDeviceFrozen     = "11003"
-	codeDeviceCodeExists = "11008"
-	codeDeviceQuota      = "11010"
-	codeTenantNotFound   = "13001"
-	codeTenantSuspended  = "13002"
-	codeTenantQuota      = "13003"
-	codeTenantCodeExists = "13004"
-	codeCrossTenant      = "13007"
+	codeBadRequest        = "10001"
+	codeUnauthorized      = "10002"
+	codeForbidden         = "10003"
+	codeNotFound          = "10004"
+	codeConflict          = "10005"
+	codeInternal          = "10007"
+	codeDeviceNotFound    = "11001"
+	codeDeviceFrozen      = "11003"
+	codeToolNotFound      = "11005"
+	codeDeviceCodeExists  = "11008"
+	codeDeviceQuota       = "11010"
+	codeTenantNotFound    = "13001"
+	codeTenantSuspended   = "13002"
+	codeTenantQuota       = "13003"
+	codeTenantCodeExists  = "13004"
+	codeCrossTenant       = "13007"
+	codeAuditQueryInvalid = "14001"
+	codeAuditExportLimit  = "14002"
 )
 
 // rolePlatformAdmin is the only role allowed to create/suspend tenants and
@@ -101,12 +106,16 @@ type AuditSink interface {
 
 // AdminOp is one administrative action worth an adc_audit_logs admin_op row.
 type AdminOp struct {
-	EventID   string // request idempotency key (design/32 6.3)
-	TenantID  string
-	ActorID   string // adc_users.id of the acting admin (SEC-21 real subject)
-	Action    string // e.g. "tenant.create", "device.credential_reset"
-	Target    string // id of the affected resource
-	Reason    string // change_reason, mandatory on mutating ops
+	EventID  string // request idempotency key (design/32 6.3)
+	TenantID string
+	ActorID  string // adc_users.id of the acting admin (SEC-21 real subject)
+	Action   string // e.g. "tenant.create", "device.credential_reset"
+	Target   string // id of the affected resource
+	Reason   string // change_reason, mandatory on mutating ops
+	// Details carries operation-specific payload for the audit trail,
+	// e.g. before/after risk levels of a tool.configure event (design/31
+	// 3.4.4: audit must contain the changed values, not just the action).
+	Details   map[string]any
 	TraceID   string
 	CreatedAt time.Time
 }
@@ -118,6 +127,18 @@ type Server struct {
 	Devices  DeviceRepo
 	APIKeys  ApiKeyRepo
 	Sessions adminauth.SessionStore
+	// Tools persists adc_device_tools risk/enable configuration (B-04,
+	// FR-006); Policies persists the tenant approval policy (B-04,
+	// FR-007 V1 single-level subset); AuditQuery serves the audit log
+	// query/export surface (B-06, FR-013). The seams are optional at
+	// construction: a nil seam fails the corresponding handlers closed
+	// with 500 code 10007 until the assembly wires it.
+	Tools      ToolRepo
+	Policies   PolicyRepo
+	AuditQuery AuditQueryRepo
+	// ExportMaxRows caps the synchronous audit CSV export (FR-013
+	// BR-013-03); zero falls back to defaultExportMaxRows.
+	ExportMaxRows int
 	// Audit receives admin_op events; nil disables emission (tests,
 	// assemblies without a wired audit pipeline).
 	Audit AuditSink
@@ -159,11 +180,24 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /v1/admin/devices", authz(deviceRead(http.HandlerFunc(s.handleListDevices))))
 	mux.Handle("PATCH /v1/admin/devices/{deviceID}", authz(admin(http.HandlerFunc(s.handlePatchDevice))))
 	mux.Handle("DELETE /v1/admin/devices/{deviceID}", authz(admin(http.HandlerFunc(s.handleDeleteDevice))))
+	mux.Handle("GET /v1/admin/devices/{deviceID}/tools", authz(admin(http.HandlerFunc(s.handleListDeviceTools))))
+	mux.Handle("PATCH /v1/admin/devices/{deviceID}/tools", authz(admin(http.HandlerFunc(s.handlePatchDeviceTools))))
+
+	mux.Handle("GET /v1/admin/tenants/{tenantID}/approval-policy", authz(admin(http.HandlerFunc(s.handleGetApprovalPolicy))))
+	mux.Handle("PUT /v1/admin/tenants/{tenantID}/approval-policy", authz(admin(http.HandlerFunc(s.handlePutApprovalPolicy))))
 
 	mux.Handle("POST /v1/admin/agent-keys", authz(admin(http.HandlerFunc(s.handleIssueKey))))
 	mux.Handle("GET /v1/admin/agent-keys", authz(admin(http.HandlerFunc(s.handleListKeys))))
 	mux.Handle("POST /v1/admin/agent-keys/{keyID}/revoke", authz(admin(http.HandlerFunc(s.handleRevokeKey))))
 	mux.Handle("POST /v1/admin/agent-keys/{keyID}/rotate", authz(admin(http.HandlerFunc(s.handleRotateKey))))
+
+	// auditor may read audit logs (design/33 1.2). The matrix in
+	// adminauth grants auditors GET/HEAD on /v1/admin/audit-logs only,
+	// so the POST export below is admin-only until that matrix is
+	// widened (follow-up; see audit.go).
+	auditRead := adminauth.RequireRole(adminauth.RoleAdmin, adminauth.RoleAuditor)
+	mux.Handle("GET /v1/admin/audit-logs", authz(auditRead(http.HandlerFunc(s.handleAuditLogs))))
+	mux.Handle("POST /v1/admin/audit-logs/export", authz(auditRead(http.HandlerFunc(s.handleAuditExport))))
 
 	// Trace id propagation guarantees an X-Trace-ID on every response,
 	// including unified error bodies (design/33 1.9).

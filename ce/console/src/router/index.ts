@@ -37,6 +37,15 @@ export const router = createRouter({
   history: createWebHistory(),
   routes: [
     { path: '/login', name: 'login', component: () => import('@/views/Login.vue') },
+    // HITL callback landing page (F-11): standalone, session-less and
+    // outside the main layout (design/20 4.14); security comes from the
+    // URL signature, not the console session.
+    {
+      path: '/hitl/action',
+      name: 'hitlAction',
+      component: () => import('@/views/hitl/ActionPage.vue'),
+      meta: { title: 'hitlAction' },
+    },
     {
       path: '/',
       component: () => import('@/layouts/MainLayout.vue'),
@@ -56,9 +65,11 @@ export const router = createRouter({
 
 // Auth guard: unauthenticated users are redirected to /login; authenticated
 // users hitting a module outside their role are sent to their home module.
+// The HITL landing page is exempt from the session requirement (F-11).
+const publicNames = ['login', 'hitlAction']
 router.beforeEach((to) => {
   const auth = useAuthStore()
-  if (to.name !== 'login' && !auth.token) return { name: 'login' }
+  if (!publicNames.includes(String(to.name)) && !auth.token) return { name: 'login' }
   if (to.name === 'login' && auth.token) return { name: 'devices' }
   const roles = to.meta.roles as Role[] | undefined
   if (roles && auth.user && !roles.includes(auth.user.role)) {

@@ -141,3 +141,111 @@ export interface Tenant {
   quota?: TenantQuota
   created_at: string
 }
+
+/**
+ * Tool risk level (FR-006): 0 read-only / 1 low / 2 high (HITL) /
+ * 3 critical (physical loop). DB is authoritative over device reports
+ * (design/32 3.6, SEC-09).
+ */
+export type ToolRiskLevel = 0 | 1 | 2 | 3
+
+/** Device tool row, GET /v1/admin/devices/{id}/tools (design/33 3.1.10). */
+export interface DeviceTool {
+  name: string
+  description: string
+  input_schema: Record<string, unknown>
+  risk_level: ToolRiskLevel
+  is_enabled: boolean
+  schema_version: number
+  updated_at: string
+}
+
+/** One tool change in the PATCH /v1/admin/devices/{id}/tools batch (design/33 3.1.11). */
+export interface ToolChange {
+  name: string
+  risk_level?: ToolRiskLevel
+  is_enabled?: boolean
+}
+
+export interface ToolPatchPayload {
+  changes: ToolChange[]
+  change_reason: string
+}
+
+/** Response of PATCH /v1/admin/devices/{id}/tools. */
+export interface ToolPatchResponse {
+  changed: number
+  failed: Array<{ name: string; reason: string }>
+}
+
+export type ApprovalTicketStatus = 'pending' | 'approved' | 'rejected' | 'expired'
+
+/** Approval ticket row, GET /v1/admin/approval-tickets (design/33 3.1.15). */
+export interface ApprovalTicket {
+  ticket_id: string
+  device_id: string
+  device_code: string
+  tool_name: string
+  arguments: Record<string, unknown>
+  risk_level: ToolRiskLevel
+  status: ApprovalTicketStatus
+  approver?: string | null
+  comment?: string | null
+  created_at: string
+  expire_at: string
+  resolved_at?: string | null
+}
+
+export type HitlDecision = 'approve' | 'reject'
+
+/** Body of POST /v1/hitl/callback (design/33 3.4.1). */
+export interface HitlCallbackPayload {
+  ticket_id: string
+  decision: HitlDecision
+  approver: string
+  comment?: string
+}
+
+/** Response of POST /v1/hitl/callback. */
+export interface HitlCallbackResponse {
+  ticket_id: string
+  status: ApprovalTicketStatus
+}
+
+export type AuditLogStatus = 'success' | 'failed' | 'blocked_by_hitl'
+
+/** Audit log row, GET /v1/admin/audit-logs (design/33 3.1.16). */
+export interface AuditLog {
+  log_id: string
+  event_type: string
+  trace_id: string
+  agent_id?: string | null
+  key_id?: string | null
+  device_id?: string | null
+  device_code?: string | null
+  tool_name?: string | null
+  request_params?: Record<string, unknown>
+  response_payload?: Record<string, unknown>
+  status: AuditLogStatus
+  hitl_approver?: string | null
+  hitl_comment?: string | null
+  exempt_reason?: string | null
+  execution_duration_ms?: number | null
+  created_at: string
+}
+
+/** Cursor pagination envelope for audit logs (design/33 1.6). */
+export interface AuditLogPage {
+  items: AuditLog[]
+  next_cursor: string | null
+}
+
+/** Summary returned by GET /v1/hitl/action for a pending ticket (landing page, F-11). */
+export interface HitlActionTicket {
+  ticket_id: string
+  device_code?: string
+  tool_name?: string
+  risk_level?: ToolRiskLevel
+  expire_at?: string
+  status?: ApprovalTicketStatus
+}

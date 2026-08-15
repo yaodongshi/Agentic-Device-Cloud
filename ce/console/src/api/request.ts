@@ -55,3 +55,26 @@ export const api = {
   patch: <T>(path: string, data?: unknown) => request<T>(path, { method: 'PATCH', body: JSON.stringify(data) }),
   delete: <T>(path: string) => request<T>(path, { method: 'DELETE' }),
 }
+
+// File export (audit CSV/JSON): same auth/error semantics as request() but
+// returns a Blob for download. Non-2xx responses carry the standard JSON
+// error body (design/33 1.5), so over-limit exports (14002) surface as a
+// regular ApiError instead of a broken file.
+export async function download(path: string, params?: Record<string, unknown>): Promise<Blob> {
+  const token = localStorage.getItem('adc_token')
+  const headers = new Headers()
+  if (token) headers.set('Authorization', `Bearer ${token}`)
+
+  const res = await fetch(`${BASE}${withQuery(path, params)}`, { headers })
+  if (!res.ok) {
+    const text = await res.text()
+    let body: { code?: string; message?: string; trace_id?: string } | undefined
+    try {
+      body = text ? JSON.parse(text) : undefined
+    } catch {
+      body = undefined
+    }
+    throw new ApiError(body?.code ?? String(res.status), body?.message ?? res.statusText, res.status, body?.trace_id)
+  }
+  return res.blob()
+}
