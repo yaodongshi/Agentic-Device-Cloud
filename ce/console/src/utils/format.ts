@@ -25,3 +25,10 @@ export function formatDate(iso?: string | null): string {
     day: '2-digit',
   }).format(d)
 }
+
+/** Compact number for quota counters (e.g. 1000000 -> 1M / 100万). */
+export function formatCompact(n?: number | null): string {
+  if (n === null || n === undefined) return '—'
+  if (!Number.isFinite(n)) return '—'
+  return new Intl.NumberFormat(undefined, { notation: 'compact', maximumFractionDigits: 1 }).format(n)
+}

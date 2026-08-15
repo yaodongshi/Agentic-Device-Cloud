@@ -122,24 +122,78 @@ export interface CreateApiKeyPayload {
   expires_at?: string | null
 }
 
-/** Tenant quota block (design/33 3.1.3). */
+/**
+ * Tenant quota block. Field names follow the design/32 adc_tenants columns
+ * (quota_devices / quota_calls_monthly / quota_concurrent, defaults
+ * 100 / 100000 / 10); design/33 3.1.3 uses different keys (max_devices etc.)
+ * and the console accepts both shapes via normalizeQuota in Tenants.vue.
+ */
 export interface TenantQuota {
-  max_devices: number
-  max_agent_keys: number
-  monthly_call_limit: number
-  audit_retention_days: number
+  quota_devices: number
+  quota_calls_monthly: number
+  quota_concurrent: number
 }
 
-/** Tenant row (design/33 3.1.2/3.1.3). */
+export type TenantStatus = 'active' | 'disabled'
+
+/**
+ * Tenant row, GET /v1/admin/tenants (design/33 3.1.2). The list contract
+ * only carries device_count; quota/used counters come from the detail
+ * endpoint (design/33 3.1.4) and are merged client-side (design/32 columns).
+ */
 export interface Tenant {
   tenant_id: string
   name: string
   code?: string
-  status: 'active' | 'disabled'
+  status: TenantStatus
   device_count?: number
   agent_key_count?: number
+  used_devices?: number
+  used_calls_month?: number
   quota?: TenantQuota
+  expires_at?: string | null
   created_at: string
+  updated_at?: string
+}
+
+/** Body of POST /v1/admin/tenants (design/33 3.1.3, quota keys per design/32). */
+export interface CreateTenantPayload {
+  name: string
+  code: string
+  quota: TenantQuota
+}
+
+/** Body of PATCH /v1/admin/tenants/{tenant_id} (design/33 3.1.5). */
+export interface TenantPatchPayload {
+  quota?: Partial<TenantQuota>
+  status?: TenantStatus
+  change_reason: string
+}
+
+export type OrgUserRole = 'platform_admin' | 'tenant_admin' | 'approver' | 'auditor'
+
+export type OrgUserStatus = 'active' | 'disabled'
+
+/** Org member row, GET /v1/admin/org/users (design/33 3.1.18). */
+export interface OrgUser {
+  user_id: string
+  display_name: string
+  account: string
+  role: OrgUserRole
+  status: OrgUserStatus
+  created_at: string
+}
+
+/**
+ * Body of PATCH /v1/admin/org/users/{user_id} — 契约待补: design/33 3.1.18
+ * only defines the member list; the role/status update endpoint is not yet
+ * in the contract. Payload follows the tenant PATCH conventions
+ * (change_reason mandatory, written to the audit log).
+ */
+export interface OrgUserPatchPayload {
+  role?: OrgUserRole
+  status?: OrgUserStatus
+  change_reason: string
 }
 
 /**

@@ -32,7 +32,7 @@
           clearable
         >
           <el-option
-            v-for="(label, key) in t('audit.statuses')"
+            v-for="(label, key) in tm('audit.statuses')"
             :key="key"
             :label="label"
             :value="key"
@@ -187,7 +187,7 @@ import { copyText } from '@/utils/clipboard'
 import { formatTime } from '@/utils/format'
 import type { AuditLog, AuditLogPage } from '@/api/types'
 
-const { t } = useI18n()
+const { t, tm } = useI18n()
 
 // Time range is mandatory for the query (design/20 4.8): default last 24h,
 // max span 31 days to avoid full scans. Shortcuts match design/20 5.2.

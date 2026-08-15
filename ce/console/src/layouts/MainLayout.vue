@@ -8,7 +8,7 @@
         {{ t('common.appName') }}
       </div>
       <el-menu
-        :default-active="$route.path"
+        :default-active="activeMenu"
         router
       >
         <el-menu-item
@@ -83,6 +83,11 @@ const menus: MenuItem[] = [
 
 const visibleMenus = computed(() =>
   auth.user ? menus.filter((m) => !m.roles || m.roles.includes(auth.user!.role)) : menus,
+)
+
+// Sub-pages (e.g. /tenants/:id/users) keep the parent module highlighted.
+const activeMenu = computed(() =>
+  route.path.startsWith('/tenants/') ? '/tenants' : route.path,
 )
 
 const currentKey = computed(() => route.meta.title as string)

@@ -22,7 +22,7 @@
           clearable
         >
           <el-option
-            v-for="(label, key) in t('devices.statuses')"
+            v-for="(label, key) in tm('devices.statuses')"
             :key="key"
             :label="label"
             :value="key"
@@ -276,7 +276,7 @@
             class="full"
           >
             <el-option
-              v-for="(label, key) in t('devices.authTypes')"
+              v-for="(label, key) in tm('devices.authTypes')"
               :key="key"
               :label="label"
               :value="key"
@@ -360,7 +360,7 @@ import type {
   RegisteredDevice,
 } from '@/api/types'
 
-const { t } = useI18n()
+const { t, tm } = useI18n()
 
 // Common device_type suggestions (design/32 example set); the backend
 // accepts any 64-char string, so the select allows free input too.

@@ -124,9 +124,11 @@ func ClassifyCASFailure(t *ApprovalTicket, wantVersion int, now time.Time) error
 // ticketCols is the column projection that rebuilds an ApprovalTicket. UUID
 // columns are cast to text because pgx v5.10 has no binary uuid-to-string
 // scan plan. callback_signature holds the SHA-256 of the ticket secret (SEC-13:
-// only a hash of the key may be persisted, design/33 1.4).
-const ticketCols = `id::text, tenant_id::text, agent_id, device_id::text, tool_name,
-	arguments, params_hash, risk_level, status, approver_name, comment,
+// only a hash of the key may be persisted, design/33 1.4). Nullable columns
+// are coalesced so plain-value scan targets never see NULL (integration
+// B-12 P1 fix).
+const ticketCols = `id::text, tenant_id::text, COALESCE(agent_id,''), device_id::text, tool_name,
+	arguments, params_hash, risk_level, status, COALESCE(approver_name,''), COALESCE(comment,''),
 	decided_at, expires_at, callback_signature, version, created_at`
 
 // PGTicketRepo is the PostgreSQL TicketRepo implementation (ADR-05,

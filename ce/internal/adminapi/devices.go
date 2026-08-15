@@ -576,10 +576,11 @@ func (s *Server) handleDeleteDevice(w http.ResponseWriter, r *http.Request) {
 // ---------------------------------------------------------------------------
 
 // deviceCols rebuilds a Device; uuid columns are cast to text (pgx v5.10
-// scan plan, see approval.PGTicketRepo).
-const deviceCols = `id::text, tenant_id::text, group_id::text, device_code, name,
-	device_type, device_class, auth_type, status, sdk_version, protocol_version,
-	last_heartbeat_at, metadata, credential_version, created_at, updated_at`
+// scan plan, see approval.PGTicketRepo). Nullable columns are coalesced so
+// the plain-value scan targets never see NULL (integration B-12 P1 fix).
+const deviceCols = `id::text, tenant_id::text, COALESCE(group_id::text,''), device_code, name,
+	device_type, device_class, auth_type, status, COALESCE(sdk_version,''), protocol_version,
+	COALESCE(last_heartbeat_at, '1970-01-01'::timestamptz), metadata, credential_version, created_at, updated_at`
 
 // pgDeviceRepo is the PostgreSQL DeviceRepo (design/32 3.5).
 type pgDeviceRepo struct {

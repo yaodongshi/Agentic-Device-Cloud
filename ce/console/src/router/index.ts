@@ -16,11 +16,14 @@ const moduleRoles: Record<string, Role[]> = {
   monitor: ['platform_admin', 'tenant_admin', 'auditor'],
 }
 
-function moduleRoute(name: string, component: string) {
+function moduleRoute(name: string, load: () => Promise<unknown>) {
   return {
     path: name === 'apiKeys' ? 'api-keys' : name,
     name,
-    component: () => import(component),
+    // The import() literal must stay at the call site: a string-argument
+    // import() cannot be analyzed by Rollup and would inline the module
+    // (and ECharts for /monitor) into the entry chunk.
+    component: load,
     meta: { title: name, roles: moduleRoles[name] },
   }
 }
@@ -52,12 +55,20 @@ export const router = createRouter({
       redirect: '/devices',
       children: [
         devices,
-        moduleRoute('tools', '@/views/tools/Tools.vue'),
-        moduleRoute('approvals', '@/views/approvals/Approvals.vue'),
-        moduleRoute('audit', '@/views/audit/Audit.vue'),
-        moduleRoute('apiKeys', '@/views/apikeys/ApiKeys.vue'),
-        moduleRoute('tenants', '@/views/tenants/Tenants.vue'),
-        moduleRoute('monitor', '@/views/monitor/Monitor.vue'),
+        moduleRoute('tools', () => import('@/views/tools/Tools.vue')),
+        moduleRoute('approvals', () => import('@/views/approvals/Approvals.vue')),
+        moduleRoute('audit', () => import('@/views/audit/Audit.vue')),
+        moduleRoute('apiKeys', () => import('@/views/apikeys/ApiKeys.vue')),
+        moduleRoute('tenants', () => import('@/views/tenants/Tenants.vue')),
+        // Org members sub-page of a tenant (F-09, design/20 4.11); not a top
+        // menu item, entered from the tenants row action.
+        {
+          path: 'tenants/:id/users',
+          name: 'tenantUsers',
+          component: () => import('@/views/tenants/OrgUsers.vue'),
+          meta: { title: 'orgUsers', roles: ['platform_admin', 'tenant_admin'] as Role[] },
+        },
+        moduleRoute('monitor', () => import('@/views/monitor/Monitor.vue')),
       ],
     },
   ],

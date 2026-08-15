@@ -133,7 +133,7 @@
             class="full"
           >
             <el-option
-              v-for="(label, key) in t('tools.riskLevels')"
+              v-for="(label, key) in tm('tools.riskLevels')"
               :key="key"
               :label="label"
               :value="Number(key)"
@@ -196,7 +196,7 @@ import { formatTime } from '@/utils/format'
 import RiskTag from '@/components/RiskTag.vue'
 import type { Device, DeviceTool, Page, ToolRiskLevel } from '@/api/types'
 
-const { t } = useI18n()
+const { t, tm } = useI18n()
 
 // Device selector feeds the tool table (design/20 4.5: the catalog is
 // scoped per device; FR-006 list endpoint takes device_id in the path).
