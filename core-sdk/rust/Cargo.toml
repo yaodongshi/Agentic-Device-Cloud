@@ -1,0 +1,24 @@
+[package]
+name = "adc-edge-sdk"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+description = "ADC edge SDK reference implementation for B-class devices: WSS reverse tunnel to the Legacy Bridge with HMAC auth, tools/list registration and tools/call dispatch"
+repository = "https://github.com/adc/core-sdk"
+keywords = ["adc", "device", "sdk", "websocket", "jsonrpc"]
+categories = ["network-programming", "embedded"]
+
+[dependencies]
+tokio = { version = "1", features = ["full"] }
+tokio-tungstenite = { version = "0.30", features = ["rustls-tls-native-roots"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+hmac = "0.12"
+sha2 = "0.10"
+hex = "0.4"
+rand = "0.9"
+thiserror = "2"
+# Companion crates of tokio-tungstenite's public API surface (already in the
+# dependency tree; declared explicitly because client code must name them).
+http = "1"
+futures-util = { version = "0.3", default-features = false, features = ["sink"] }
