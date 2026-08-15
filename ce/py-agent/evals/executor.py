@@ -87,9 +87,7 @@ class MockExecutor:
         if tool is None:
             return EvalOutcome(STATUS_ERROR, f"tool not found: {case.tool}")
         if tool.effective_risk == 3:
-            return EvalOutcome(
-                STATUS_BLOCKED, f"tool {case.tool} requires approval (risk level 3)"
-            )
+            return EvalOutcome(STATUS_BLOCKED, f"tool {case.tool} requires approval (risk level 3)")
         result = ToolCallResult(
             content=[ToolContent(type="text", text=f"mock ok: {case.tool}")],
             isError=False,

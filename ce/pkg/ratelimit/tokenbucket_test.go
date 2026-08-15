@@ -213,7 +213,15 @@ func TestParseEvalResult(t *testing.T) {
 type boolValue struct{}
 
 func TestMemStoreConcurrent(t *testing.T) {
-	lim := newTestLimiter(t, map[Scope]Limit{ScopeTenant: {Rate: 100, Burst: 100}})
+	// Fixed clock: 150 concurrent requests must admit exactly the burst of
+	// 100 — no wall-clock micro-refills may leak in (P1 fix: the previous
+	// real-clock version intermittently admitted 101).
+	lim, err := NewTokenBucketWithClock(NewMemStore(), map[Scope]Limit{ScopeTenant: {Rate: 100, Burst: 100}}, func() time.Time {
+		return time.Unix(1_700_000_000, 0)
+	})
+	if err != nil {
+		t.Fatalf("NewTokenBucketWithClock: %v", err)
+	}
 	ctx := context.Background()
 	var wg sync.WaitGroup
 	var mu sync.Mutex

@@ -11,6 +11,14 @@ networks:
 volumes:
   adc_pg_data: {}
   adc_valkey_data: {}
+  # Backup + WAL archive volume (design/60 8.1, design/80 A-08):
+  # dumps and WAL segments land in /backup; ownership is fixed by
+  # deploy/backup/backup.sh init-backup-dir.
+  adc_backup: {}
+  # Observability state (observability profile, design/80 A-07)
+  adc_prom_data: {}
+  adc_grafana_data: {}
+  adc_loki_data: {}
 
 services:
   postgres:
@@ -21,9 +29,26 @@ services:
       POSTGRES_USER: ${ADC_PG_USER:-adc}
       POSTGRES_PASSWORD: ${ADC_PG_PASSWORD:-adc_dev_only}
       POSTGRES_DB: ${ADC_PG_DBNAME:-adc}
+    # A-08: WAL archiving (RPO <= 5 min, design/60 8.1). The four -c values
+    # mirror deploy/backup/postgres.conf (mounted read-only as reference);
+    # include_dir cannot be passed via -c, so the flags are explicit.
+    # Segments go to the adc_backup volume (/backup/wal). One-time ownership
+    # fix: deploy/backup/backup.sh init-backup-dir
+    command:
+      - "postgres"
+      - "-c"
+      - "archive_mode=on"
+      - "-c"
+      - "archive_command=mkdir -p /backup/wal && test ! -f /backup/wal/%f && cp %p /backup/wal/%f"
+      - "-c"
+      - "archive_timeout=300"
+      - "-c"
+      - "wal_level=replica"
     volumes:
       - adc_pg_data:/var/lib/postgresql/data
       - ../ce/migrations:/docker-entrypoint-initdb.d:ro
+      - adc_backup:/backup
+      - ./backup/postgres.conf:/etc/postgresql/adc-archive.conf:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
       interval: 5s
@@ -31,13 +56,86 @@ services:
       retries: 12
     networks: [adc-net]
 
+  # ---- Observability profile (design/80 A-07, design/60 ch. 6) ---------
+  # Start: docker compose -f deploy/compose.yaml --profile observability up -d
+  # All ports bind to loopback only; Grafana is the human entry point at
+  # http://127.0.0.1:19300 (admin / ${GF_ADMIN_PASSWORD:-adc_dev_only}).
+  prometheus:
+    image: prom/prometheus:v3.2.1
+    container_name: adc-prometheus
+    restart: unless-stopped
+    profiles: [observability]
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      # 30d retention, aligns with design/60 6.5 downsampling budget
+      - --storage.tsdb.retention.time=30d
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./prometheus/alert-rules.yml:/etc/prometheus/alert-rules.yml:ro
+      - adc_prom_data:/prometheus
+    ports:
+      - "127.0.0.1:19090:9090"
+    networks: [adc-net]
+
+  grafana:
+    image: grafana/grafana:11.6.2
+    container_name: adc-grafana
+    restart: unless-stopped
+    profiles: [observability]
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GF_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GF_ADMIN_PASSWORD:-adc_dev_only}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_USERS_ALLOW_ORG_CREATE: "false"
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - adc_grafana_data:/var/lib/grafana
+    ports:
+      - "127.0.0.1:19300:3000"
+    networks: [adc-net]
+
+  loki:
+    image: grafana/loki:3.4.3
+    container_name: adc-loki
+    restart: unless-stopped
+    profiles: [observability]
+    # local-config.yaml ships inside the image; state on the named volume
+    command: -config.file=/etc/loki/local-config.yaml
+    volumes:
+      - adc_loki_data:/loki
+    ports:
+      - "127.0.0.1:19310:3100"
+    networks: [adc-net]
+
+  # promtail (placeholder, commented out): ships docker json-file logs to
+  # loki per design/60 6.2. Enable on Linux production hosts only — the
+  # daemon paths below are not visible inside Docker Desktop (macOS/Windows),
+  # keep it off on dev desktops. Config: deploy/promtail/promtail.yml.
+  # promtail:
+  #   image: grafana/promtail:3.4.3
+  #   container_name: adc-promtail
+  #   restart: unless-stopped
+  #   profiles: [observability]
+  #   command: -config.file=/etc/promtail/config.yml
+  #   volumes:
+  #     - ./promtail/promtail.yml:/etc/promtail/config.yml:ro
+  #     - /var/lib/docker/containers:/var/lib/docker/containers:ro
+  #     - /var/run/docker.sock:/var/run/docker.sock:ro
+  #   depends_on: [loki]
+  #   networks: [adc-net]
+
   valkey:
     image: valkey/valkey:8-alpine
     container_name: adc-valkey
     restart: unless-stopped
     # SEC-06: ACL 落地——default 用户关闭，业务走专用 `adc` 用户
     #（规则见 deploy/valkey-acl.conf，密码须与 ADC_VALKEY_PASSWORD 同步）。
-    # --requirepass 保留为兜底；TLS 端口为生产形态（design/60 7.1），dev 默认关闭。
+    # Valkey 8.x 的 aclfile 解析器不接受 # 注释，valkey-acl.conf 只能含 user 指令，
+    # 说明性注释统一放在本文件。--requirepass 保留为兜底；TLS 端口为生产形态
+    #（design/60 7.1），dev 默认关闭。
     command: ["valkey-server", "--requirepass", "${ADC_VALKEY_PASSWORD:-adc_dev_only}", "--aclfile", "/etc/valkey/acl.conf"]
     volumes:
       - adc_valkey_data:/data

@@ -1,0 +1,94 @@
+name: Bug report
+description: Report a bug in ADC (core-sdk, ce, deploy, docs)
+title: "bug: "
+labels: ["bug", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report a bug.
+
+        If this is a security vulnerability, do **not** open an issue. Report it privately to security@zodioo.com (see SECURITY.md).
+  - type: checkboxes
+    id: searched
+    attributes:
+      label: Search first
+      description: Confirm this bug has not been reported yet.
+      options:
+        - label: I searched existing issues and this bug has not been reported
+          required: true
+  - type: dropdown
+    id: component
+    attributes:
+      label: Component
+      options:
+        - core-sdk (SDK / wire protocol)
+        - ce/ gateway
+        - ce/ agent API
+        - ce/ approval (HITL)
+        - ce/ audit
+        - console (web UI)
+        - deploy (compose / images)
+        - docs
+        - other
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: ADC version
+      description: For example v1.0.0, or the commit SHA if built from source.
+      placeholder: v1.0.0
+    validations:
+      required: true
+  - type: dropdown
+    id: deployment
+    attributes:
+      label: Deployment
+      options:
+        - docker compose
+        - self-hosted binary
+        - SaaS
+        - other
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: What happened
+      description: A clear description of the unexpected behavior.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: What should have happened instead.
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. ...
+        2. ...
+        3. ...
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs and error messages
+      render: shell
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      placeholder: |
+        OS / architecture:
+        Go / Python / Node versions:
+        Browser (for console issues):
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Anything else that helps reproduce or understand the bug.

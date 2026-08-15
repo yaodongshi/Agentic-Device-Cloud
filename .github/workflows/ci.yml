@@ -1,0 +1,182 @@
+# ADC 主 CI 门禁（design/80 A-03/B2，design/60 5.1~5.2 门禁表，doc/06 6.3 CI 门禁）
+#
+# 触发：push dev 分支、全部 pull_request。
+# 门禁链：
+#   go     —— gofmt 零差异 → go vet → go test -race（覆盖率统计 + 门槛）
+#   python —— uv lock --check → ruff check/format --check → pytest（core-sdk/python 与 ce/py-agent 双项目矩阵）
+#   docker —— buildx 双架构（linux/amd64+linux/arm64）构建验证（A-04，不推送）
+#             → syft SPDX SBOM 生成 → trivy 漏洞扫描（CRITICAL 阻断）
+#
+# console 前端门禁不在此文件：已有 .github/workflows/console-ci.yml
+# （lint/typecheck/vitest/build/Playwright E2E，按 ce/console 路径触发），
+# 本文件不再重复 console job，避免同一门禁双份执行。
+#
+# 待后续 OpenSpec 变更接入（A-03 增量，与 design/40 3.5 对齐）：
+#   govulncheck（Go 依赖漏洞）、gitleaks（SEC-25 密钥扫描）、
+#   许可证扫描 licensecheck/ScanCode（doc/06 6.3 白名单门禁）。
+# 现未接入，接入前本流水线不等价于发布门禁全量。
+
+name: ci
+
+on:
+  push:
+    branches: [dev]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  go:
+    name: go (gofmt + vet + test -race + coverage)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.x"
+          # go.work 工作区：ce/ 与 core-sdk/ 两个模块共享依赖缓存
+          cache-dependency-path: |
+            ce/go.mod
+            core-sdk/go.mod
+
+      - name: gofmt 检查（零差异）
+        run: |
+          # 仅检查仓库跟踪的 .go 文件（ce/console/node_modules 内偶有第三方 Go 文件，不纳入）
+          unformatted=$(git ls-files '*.go' | xargs -r gofmt -l)
+          if [ -n "$unformatted" ]; then
+            echo "::error::gofmt 未格式化的文件：" && echo "$unformatted" && exit 1
+          fi
+          echo "gofmt 检查通过"
+
+      - name: go vet
+        # go.work 工作区：从仓库根以模块前缀模式执行（根目录本身非模块）
+        run: go vet ./ce/... ./core-sdk/...
+
+      - name: go test -race + 覆盖率输出
+        run: go test ./ce/... ./core-sdk/... -race -covermode=atomic -coverprofile=coverage.out
+
+      - name: 覆盖率统计与门槛
+        run: |
+          go tool cover -func=coverage.out
+          TOTAL=$(go tool cover -func=coverage.out | awk '/^total:/{print $3}' | tr -d '%')
+          echo "实际总覆盖率：${TOTAL}%"
+          # 覆盖率门槛（design/40：单测行覆盖不低于 70%）。
+          # 当前实际值 64.5%（2026-08-15 实测），未达 70%，门槛待达到后启用——
+          # 启用方式：取消下面 6 行注释（THRESHOLD=70 及其判断块）。
+          # THRESHOLD=70
+          # if awk "BEGIN{exit !(${TOTAL} >= ${THRESHOLD})}"; then
+          #   echo "覆盖率 ${TOTAL}% 不低于门槛 ${THRESHOLD}%，通过"
+          # else
+          #   echo "::error::覆盖率 ${TOTAL}% 低于门槛 ${THRESHOLD}%，阻断合并"
+          #   exit 1
+          # fi
+
+      - name: 上传覆盖率产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: go-coverage
+          path: coverage.out
+          retention-days: 7
+
+  python:
+    name: python (ruff + pytest + uv lock)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      # 双项目矩阵（design/60 5.6）：core-sdk/python 契约实现 + ce/py-agent Agent 面
+      matrix:
+        project: [core-sdk/python, ce/py-agent]
+    defaults:
+      run:
+        working-directory: ${{ matrix.project }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+
+      - uses: astral-sh/setup-uv@v5
+
+      - name: uv 依赖锁定一致性（design/60 5.2：uv.lock 与 pyproject.toml 一致，离线可复现）
+        run: uv lock --check
+
+      - name: uv 安装依赖（--frozen 按 uv.lock 固化，含 dev 组）
+        run: uv sync --frozen
+
+      - name: ruff 静态检查（lint + format，零告警，design/40 PY-007）
+        run: |
+          uv run ruff check .
+          uv run ruff format --check .
+
+      - name: pytest 单测
+        env:
+          # 显式 PYTHONPATH：保证 app/evals 等包在任意工作目录均可导入
+          PYTHONPATH: ${{ github.workspace }}/${{ matrix.project }}
+        run: uv run pytest -q
+
+  docker:
+    name: docker (buildx 双架构 + syft SBOM + trivy)
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: adc
+            dockerfile: Dockerfile.adc
+          - name: py-agent
+            dockerfile: Dockerfile.pyagent
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-qemu-action@v3
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: buildx 双架构构建验证（linux/amd64+linux/arm64，不推送，A-04）
+        run: |
+          # 双平台 manifest list 组装成功即验证 A-04 硬约束（design/60 5.2：缺任一架构阻断）。
+          # 产物导出为 OCI layout tar，供 syft/trivy 本地扫描（CI 不推送镜像）。
+          # arm64 经 QEMU 模拟构建；arm64 环境冒烟属 A-04 实测项，另行执行。
+          docker buildx build \
+            --platform linux/amd64,linux/arm64 \
+            -f ${{ matrix.dockerfile }} \
+            -t adc-ci/${{ matrix.name }}:test \
+            -o type=oci,dest=/tmp/${{ matrix.name }}.tar \
+            .
+          mkdir -p /tmp/${{ matrix.name }}-layout
+          tar -C /tmp/${{ matrix.name }}-layout -xf /tmp/${{ matrix.name }}.tar
+
+      - name: 安装 syft
+        uses: anchore/sbom-action/download-syft@v0.24.0
+
+      - name: syft SBOM 生成（SPDX，双平台）
+        run: |
+          for PLATFORM in linux/amd64 linux/arm64; do
+            ARCH=${PLATFORM#linux/}
+            syft scan "oci-dir:/tmp/${{ matrix.name }}-layout" --platform "$PLATFORM" \
+              -o "spdx-json=sbom-${{ matrix.name }}-${ARCH}.spdx.json"
+          done
+
+      - name: 上传 SBOM 产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom-${{ matrix.name }}
+          path: sbom-${{ matrix.name }}-*.spdx.json
+          retention-days: 30
+
+      - name: 安装 trivy
+        uses: aquasecurity/setup-trivy@v0.3.1
+
+      - name: trivy 漏洞扫描（CRITICAL 阻断，双平台；design/60 5.2：CRITICAL 为 0）
+        run: |
+          for PLATFORM in linux/amd64 linux/arm64; do
+            trivy image --input /tmp/${{ matrix.name }}-layout \
+              --platform "$PLATFORM" \
+              --severity CRITICAL --exit-code 1 --format table
+          done

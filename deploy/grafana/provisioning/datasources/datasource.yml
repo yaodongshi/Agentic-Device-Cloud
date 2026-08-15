@@ -1,0 +1,23 @@
+# Grafana datasource provisioning (design/80 A-07).
+# Prometheus runs in the same compose project; the service name `prometheus`
+# resolves on adc-net. Grafana itself is exposed only on 127.0.0.1:19300.
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    uid: adc-prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    editable: false
+    jsonData:
+      timeInterval: 15s
+  # Optional second source: enable together with the promtail service block in
+  # compose.yaml (Linux production hosts only, design/60 6.2).
+  # - name: Loki
+  #   uid: adc-loki
+  #   type: loki
+  #   access: proxy
+  #   url: http://loki:3100
+  #   editable: false

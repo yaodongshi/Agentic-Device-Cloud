@@ -28,14 +28,14 @@ import (
 //	ErrDeviceDisabled      -> 403 code 11003 / 401 code 11004
 //	ErrCredentialNotFound  -> 404 code 11001
 var (
-	ErrInvalidID          = errors.New("auth: invalid device id or nonce format")
-	ErrInvalidTimestamp   = errors.New("auth: timestamp outside allowed window")
-	ErrNonceReused        = errors.New("auth: nonce already consumed (replay)")
-	ErrNonceStore         = errors.New("auth: nonce store unavailable (fail closed)")
-	ErrCredentialNotFound = errors.New("auth: device credential not found")
-	ErrDeviceDisabled     = errors.New("auth: device disabled (frozen or retired)")
+	ErrInvalidID           = errors.New("auth: invalid device id or nonce format")
+	ErrInvalidTimestamp    = errors.New("auth: timestamp outside allowed window")
+	ErrNonceReused         = errors.New("auth: nonce already consumed (replay)")
+	ErrNonceStore          = errors.New("auth: nonce store unavailable (fail closed)")
+	ErrCredentialNotFound  = errors.New("auth: device credential not found")
+	ErrDeviceDisabled      = errors.New("auth: device disabled (frozen or retired)")
 	ErrUnsupportedAuthType = errors.New("auth: auth_type does not support hmac signing")
-	ErrBadSignature       = errors.New("auth: signature mismatch")
+	ErrBadSignature        = errors.New("auth: signature mismatch")
 )
 
 // Retryable marks transient errors that may succeed on retry (LLD 1.3.4).

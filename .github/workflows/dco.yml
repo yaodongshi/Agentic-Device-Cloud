@@ -1,0 +1,54 @@
+# ADC DCO 检查（占位门禁）
+#
+# 背景（doc/06 七、BR-018-02、design/80 A-10/B4）：
+# 所有合入提交须以 Signed-off-by 签署 DCO（Developer Certificate of Origin），
+# 声明贡献者拥有代码权利并按目标仓许可授权（core-sdk/ 为 Apache-2.0、ce/ 为 LGPL-3.0）。
+#
+# 本文件为轻量占位实现：对 PR 内每个非 merge 提交检查 Signed-off-by 行，缺失即阻断。
+# DCO 精确实现（proboc/dco bot、fork 分支自动补签提示、历史提交核查、与
+# CONTRIBUTING.md 的签署说明联动）留待 A-10 开源社区工程任务落地；
+# A-10 落地后以官方 bot 为准，本工作流仅作基线校验，两者可并行（bot 非强制时必须保持本阻断）。
+#
+# 本地补签方式（对缺失签名的提交）：
+#   git rebase HEAD~N --signoff   （或 git commit --amend -s 对最近一次提交）
+#   然后强制推送 PR 分支。
+
+name: dco-check
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  dco:
+    name: DCO Signed-off-by 校验
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 校验 PR 全部提交的 DCO 签名
+        run: |
+          PR=${{ github.event.pull_request.number }}
+          BASE=${{ github.event.pull_request.base.sha }}
+          # fork PR 的 head 提交不在 checkout 的 refs 内，须显式按 pull ref 拉取
+          git fetch origin "refs/pull/${PR}/head:refs/remotes/origin/pr-${PR}"
+
+          MISSING=""
+          # 逐个检查非 merge 提交；merge commit 不要求签名
+          for sha in $(git rev-list --no-merges "${BASE}..pr-${PR}"); do
+            if ! git log -1 --format=%B "$sha" | grep -qiE '^Signed-off-by: .+ <.+@.+\..+>'; then
+              MISSING="${MISSING} ${sha}"
+            fi
+          done
+
+          if [ -n "$MISSING" ]; then
+            echo "::error::以下提交缺少 DCO Signed-off-by 签名：${MISSING}"
+            echo "::error::补签方式：git rebase --signoff 后强制推送 PR 分支（详见本文件头部说明）。"
+            exit 1
+          fi
+          echo "DCO 校验通过：PR 全部提交均已签署 Signed-off-by"

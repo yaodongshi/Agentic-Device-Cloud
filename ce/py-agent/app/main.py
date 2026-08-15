@@ -20,9 +20,7 @@ DEFAULT_SUITES_DIR_ENV = "ADC_EVAL_SUITES_DIR"
 
 def create_app(suites_dir: Path | None = None) -> FastAPI:
     """Assemble the application with its own harness instance."""
-    harness = EvalHarness(
-        suites_dir or Path(os.environ.get(DEFAULT_SUITES_DIR_ENV, "suites"))
-    )
+    harness = EvalHarness(suites_dir or Path(os.environ.get(DEFAULT_SUITES_DIR_ENV, "suites")))
     app = FastAPI(title="ADC Python Agent Plane", version="0.1.0")
 
     @app.get("/healthz")

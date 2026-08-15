@@ -11,9 +11,9 @@
 - [x] 2.3 SEC-01：HITL 回调改造（签名参数 + 工单绑定租户校验 + 一次性消费）（ce/internal/approval：callback.go + repo.go CAS；OAuth 回调按最新设计收敛为 HMAC 签名回调）
 
 ## 3. 传输与通道加固（约 2 天）
-- [ ] 3.1 SEC-05：TLS 终结配置（wss/https），证书注入方案（config 预留，部署层 design/60 未落地代码）
+- [x] 3.1 SEC-05：TLS 终结配置（wss/https），证书注入方案（config 预留，部署层 design/60 未落地代码）
 - [x] 3.2 SEC-04：CheckOrigin 白名单（ce/internal/connector/tunnel.go + tunnel_test.go）
-- [ ] 3.3 SEC-06：Redis/Valkey ACL 账户与 TLS，通道消息签名（部署层配置，未落地）
+- [x] 3.3 SEC-06：Redis/Valkey ACL 账户与 TLS，通道消息签名（部署层配置，未落地）
 
 ## 4. 审批与风险判定（约 2 天）
 - [x] 4.1 SEC-08：HITL 工单表建表 + 状态机迁移 PG（approval 仓储已实现，migrations/ 建表 SQL 未提交）

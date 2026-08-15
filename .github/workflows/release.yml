@@ -1,0 +1,164 @@
+# ADC 发布流水线（design/80 A-05，design/60 5.1~5.6，doc/06 6.3）
+#
+# tag vX.Y.Z 触发，链路：
+#   CHANGELOG 校验（缺失生成 Keep a Changelog 模板；缺少 ## [X.Y.Z] 条目阻断）
+#   → 双架构镜像构建并推送 ghcr.io（linux/amd64+linux/arm64 硬约束，--sbom + provenance 内嵌）
+#   → trivy CRITICAL 门禁（双平台）
+#   → cosign keyless 签名（未签名阻断发布，design/60 5.2）
+#   → GitHub Release 创建（Release Notes 取 CHANGELOG 版本条目，附 SPDX SBOM 附件）
+#
+# 制品晋升铁律（design/60 5.5）：本流水线是唯一镜像构建入口，同一镜像摘要原样发布，
+# 禁止在其他环境重新构建。
+# 三仓联动（ADR-12）：ee/ 装配镜像依赖 ce/ 同 tag 镜像，ee 私有仓流水线须校验本 tag 已发布。
+# 镜像命名跟随 github.repository（仓库迁移到 adc-io 组织后自动指向 ghcr.io/adc-io/*，design/60 2.7）。
+
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write  # 创建 GitHub Release
+  packages: write  # 推送 ghcr.io
+  id-token: write  # cosign keyless（GitHub OIDC）
+
+env:
+  REGISTRY: ghcr.io
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 推导镜像仓库路径与版本号
+        id: meta
+        run: |
+          # ghcr.io 路径必须全小写
+          REPO_LOWER=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
+          echo "image_base=${REGISTRY}/${REPO_LOWER}" >> "$GITHUB_OUTPUT"
+          echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: CHANGELOG 校验（缺失生成模板；缺少版本条目阻断）
+        run: |
+          VERSION="${{ steps.meta.outputs.version }}"
+          if [ ! -f CHANGELOG.md ]; then
+            echo "::warning::CHANGELOG.md 不存在，已按 Keep a Changelog 生成模板骨架；"
+            echo "::warning::请补充 ## [${VERSION}] 条目后重新推送 tag（删除旧 tag 重建）。"
+          cat > CHANGELOG.md <<'EOF'
+          # Changelog
+
+          All notable changes to this project will be documented in this file.
+
+          The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
+          and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+          ## [Unreleased]
+
+          ### Added
+
+          ### Changed
+
+          ### Fixed
+          EOF
+          fi
+          if ! grep -Fq "## [${VERSION}]" CHANGELOG.md; then
+            echo "::error::CHANGELOG.md 缺少 ## [${VERSION}] 条目（doc/06 6.3：每个 release 附 changelog）。"
+            echo "::error::补充条目后删除旧 tag 并重新打 tag：git tag -d v${VERSION} && git push origin :refs/tags/v${VERSION} && git tag v${VERSION} && git push origin v${VERSION}"
+            exit 1
+          fi
+          # 提取该版本条目作为 Release Notes（标题可带日期后缀，按行首前缀匹配；到下一个 ## [ 为止）
+          awk -v target="## [${VERSION}]" '
+            found && /^## \[/ {exit}
+            index($0, target) == 1 {found=1; print; next}
+            found {print}
+          ' CHANGELOG.md > /tmp/release-notes.md
+          test -s /tmp/release-notes.md
+
+      - uses: docker/setup-qemu-action@v3
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 构建并推送 adc（Go 数据面，双架构硬约束）
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.adc
+          platforms: linux/amd64,linux/arm64
+          push: true
+          sbom: true
+          provenance: mode=max
+          tags: |
+            ${{ steps.meta.outputs.image_base }}/adc:${{ github.ref_name }}
+            ${{ steps.meta.outputs.image_base }}/adc:latest
+
+      - name: 构建并推送 py-agent（Python Agent 面，双架构硬约束）
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.pyagent
+          platforms: linux/amd64,linux/arm64
+          push: true
+          sbom: true
+          provenance: mode=max
+          tags: |
+            ${{ steps.meta.outputs.image_base }}/py-agent:${{ github.ref_name }}
+            ${{ steps.meta.outputs.image_base }}/py-agent:latest
+
+      - uses: aquasecurity/setup-trivy@v0.3.1
+
+      - name: trivy 漏洞扫描（CRITICAL 阻断，双平台双镜像）
+        run: |
+          BASE="${{ steps.meta.outputs.image_base }}"
+          TAG="${{ github.ref_name }}"
+          for IMAGE in adc py-agent; do
+            for PLATFORM in linux/amd64 linux/arm64; do
+              trivy image --platform "$PLATFORM" \
+                "${BASE}/${IMAGE}:${TAG}" \
+                --severity CRITICAL --exit-code 1 --format table
+            done
+          done
+
+      - name: 安装 syft
+        uses: anchore/sbom-action/download-syft@v0.24.0
+
+      - name: 生成 SPDX SBOM（随 Release 附件发布，doc/06 6.3：不生成 SBOM 不允许发版）
+        run: |
+          BASE="${{ steps.meta.outputs.image_base }}"
+          TAG="${{ github.ref_name }}"
+          for IMAGE in adc py-agent; do
+            for PLATFORM in linux/amd64 linux/arm64; do
+              ARCH=${PLATFORM#linux/}
+              syft scan "registry:${BASE}/${IMAGE}:${TAG}" --platform "$PLATFORM" \
+                -o "spdx-json=sbom-${IMAGE}-${ARCH}.spdx.json"
+            done
+          done
+
+      - uses: sigstore/cosign-installer@v3.2.0
+
+      - name: cosign keyless 签名（design/60 5.2：未签名阻断发布）
+        run: |
+          BASE="${{ steps.meta.outputs.image_base }}"
+          TAG="${{ github.ref_name }}"
+          for IMAGE in adc py-agent; do
+            cosign sign --yes "${BASE}/${IMAGE}:${TAG}"
+          done
+
+      - name: 创建 GitHub Release（附 SBOM 与 CHANGELOG）
+        uses: softprops/action-gh-release@v2
+        with:
+          name: ${{ github.ref_name }}
+          body_path: /tmp/release-notes.md
+          files: |
+            sbom-*.spdx.json
+            CHANGELOG.md

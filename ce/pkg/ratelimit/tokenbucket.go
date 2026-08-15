@@ -121,6 +121,22 @@ func NewTokenBucket(store Store, limits map[Scope]Limit) (*TokenBucketLimiter, e
 	}, nil
 }
 
+// WithClock overrides the limiter clock (testability; the field is unexported).
+func WithClock(now func() time.Time) func(*TokenBucketLimiter) {
+	return func(l *TokenBucketLimiter) { l.now = now }
+}
+
+// NewTokenBucketWithClock is NewTokenBucket plus a clock injection, used by
+// concurrency tests that must not race against wall-clock micro-refills.
+func NewTokenBucketWithClock(store Store, limits map[Scope]Limit, now func() time.Time) (*TokenBucketLimiter, error) {
+	l, err := NewTokenBucket(store, limits)
+	if err != nil {
+		return nil, err
+	}
+	l.now = now
+	return l, nil
+}
+
 // Allow consumes one token for scope/key and reports admission.
 func (l *TokenBucketLimiter) Allow(ctx context.Context, scope Scope, key string) (bool, error) {
 	allowed, _, err := l.AllowInfo(ctx, scope, key)

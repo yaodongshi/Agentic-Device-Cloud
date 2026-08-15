@@ -38,8 +38,7 @@ class WireModel(BaseModel):
                 value = value.to_wire_dict()
             elif isinstance(value, list):
                 value = [
-                    item.to_wire_dict() if isinstance(item, WireModel) else item
-                    for item in value
+                    item.to_wire_dict() if isinstance(item, WireModel) else item for item in value
                 ]
             if value is None:
                 continue
@@ -137,6 +136,7 @@ class Handshake(WireModel):
     capabilities: list[str] | None = None
 
     _omitempty_list_fields = ("capabilities",)
+
 
 # ---------------------------------------------------------------------------
 # MCP tool definitions

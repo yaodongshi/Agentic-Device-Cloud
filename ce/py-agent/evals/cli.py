@@ -25,13 +25,9 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--suites-dir", default="suites", help="directory holding <suite>.json files"
     )
-    parser.add_argument(
-        "--tool-filter", help="only run cases whose tool contains this substring"
-    )
+    parser.add_argument("--tool-filter", help="only run cases whose tool contains this substring")
     parser.add_argument("--output", help="write the report as JSON to this file")
-    parser.add_argument(
-        "--list-suites", action="store_true", help="list available suites and exit"
-    )
+    parser.add_argument("--list-suites", action="store_true", help="list available suites and exit")
     return parser
 
 

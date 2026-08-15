@@ -1,0 +1,15 @@
+# Dashboard provider: loads JSON dashboards from /var/lib/grafana/dashboards,
+# mounted read-only from ./dashboards by compose.yaml (observability profile).
+apiVersion: 1
+
+providers:
+  - name: ADC
+    orgId: 1
+    folder: ADC
+    type: file
+    disableDeletion: true
+    updateIntervalSeconds: 30
+    allowUiUpdates: false
+    options:
+      path: /var/lib/grafana/dashboards
+      foldersFromFilesStructure: false
