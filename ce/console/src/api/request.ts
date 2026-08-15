@@ -24,8 +24,12 @@ export async function request<T>(path: string, init: RequestInit = {}): Promise<
   const text = await res.text()
   const body = text ? JSON.parse(text) : undefined
 
-  if (res.status === 401) {
+  if (res.status === 401 && !window.location.pathname.startsWith('/login')) {
+    // Session expired or revoked: drop local token and bounce to the login
+    // page (F-02). Skip the redirect on the login page itself so a wrong
+    // password can render its inline error instead of reloading.
     localStorage.removeItem('adc_token')
+    localStorage.removeItem('adc_user')
     window.location.href = '/login'
     throw new ApiError('10002', 'unauthenticated', res.status, body?.trace_id)
   }
@@ -35,8 +39,19 @@ export async function request<T>(path: string, init: RequestInit = {}): Promise<
   return body as T
 }
 
+// Build a query string from a plain object, skipping empty values.
+function withQuery(path: string, params?: Record<string, unknown>): string {
+  if (!params) return path
+  const qs = Object.entries(params)
+    .filter(([, v]) => v !== undefined && v !== null && v !== '')
+    .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(String(v))}`)
+    .join('&')
+  return qs ? `${path}?${qs}` : path
+}
+
 export const api = {
-  get: <T>(path: string) => request<T>(path),
+  get: <T>(path: string, params?: Record<string, unknown>) => request<T>(withQuery(path, params)),
   post: <T>(path: string, data?: unknown) => request<T>(path, { method: 'POST', body: JSON.stringify(data) }),
   patch: <T>(path: string, data?: unknown) => request<T>(path, { method: 'PATCH', body: JSON.stringify(data) }),
+  delete: <T>(path: string) => request<T>(path, { method: 'DELETE' }),
 }

@@ -1,17 +1,47 @@
 <template>
   <el-container class="layout">
-    <el-aside width="220px" class="aside">
-      <div class="brand">{{ t('common.appName') }}</div>
-      <el-menu :default-active="$route.path" router>
-        <el-menu-item v-for="item in menus" :key="item.path" :index="item.path">
+    <el-aside
+      width="220px"
+      class="aside"
+    >
+      <div class="brand">
+        {{ t('common.appName') }}
+      </div>
+      <el-menu
+        :default-active="$route.path"
+        router
+      >
+        <el-menu-item
+          v-for="item in visibleMenus"
+          :key="item.path"
+          :index="item.path"
+        >
           {{ t(`menu.${item.key}`) }}
         </el-menu-item>
       </el-menu>
     </el-aside>
     <el-container>
       <el-header class="header">
-        <span>{{ t(`menu.${currentKey}`) }}</span>
-        <el-button text @click="logout">{{ t('common.cancel') }}</el-button>
+        <span class="page-title">{{ t(`menu.${currentKey}`) }}</span>
+        <el-dropdown
+          v-if="auth.user"
+          trigger="click"
+        >
+          <span class="user">
+            {{ auth.user.displayName }}
+            <el-tag
+              size="small"
+              class="role"
+            >{{ t(`layout.roles.${auth.user.role}`) }}</el-tag>
+          </span>
+          <template #dropdown>
+            <el-dropdown-menu>
+              <el-dropdown-item @click="confirmLogout">
+                {{ t('layout.logout') }}
+              </el-dropdown-item>
+            </el-dropdown-menu>
+          </template>
+        </el-dropdown>
       </el-header>
       <el-main><router-view /></el-main>
     </el-container>
@@ -22,26 +52,59 @@
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
+import { ElMessageBox } from 'element-plus'
+import { api } from '@/api/request'
 import { useAuthStore } from '@/stores/auth'
+import type { Role } from '@/api/types'
 
 const { t } = useI18n()
 const route = useRoute()
 const router = useRouter()
 const auth = useAuthStore()
 
-const menus = [
+// Menu visibility by role mirrors the design/20 2.2 matrix mapped onto the
+// design/33 Admin API roles; unknown roles see every module (the backend
+// still enforces access server-side).
+interface MenuItem {
+  path: string
+  key: string
+  roles?: Role[]
+}
+
+const menus: MenuItem[] = [
   { path: '/devices', key: 'devices' },
-  { path: '/tools', key: 'tools' },
-  { path: '/approvals', key: 'approvals' },
-  { path: '/audit', key: 'audit' },
-  { path: '/api-keys', key: 'apiKeys' },
-  { path: '/tenants', key: 'tenants' },
-  { path: '/monitor', key: 'monitor' },
+  { path: '/tools', key: 'tools', roles: ['platform_admin', 'tenant_admin'] },
+  { path: '/approvals', key: 'approvals', roles: ['platform_admin', 'tenant_admin', 'approver'] },
+  { path: '/audit', key: 'audit', roles: ['platform_admin', 'tenant_admin', 'auditor'] },
+  { path: '/api-keys', key: 'apiKeys', roles: ['platform_admin', 'tenant_admin'] },
+  { path: '/tenants', key: 'tenants', roles: ['platform_admin'] },
+  { path: '/monitor', key: 'monitor', roles: ['platform_admin', 'tenant_admin', 'auditor'] },
 ]
+
+const visibleMenus = computed(() =>
+  auth.user ? menus.filter((m) => !m.roles || m.roles.includes(auth.user!.role)) : menus,
+)
 
 const currentKey = computed(() => route.meta.title as string)
 
-function logout() {
+async function confirmLogout() {
+  const ok = await ElMessageBox.confirm(t('layout.logoutConfirm'), t('layout.logout'), {
+    type: 'warning',
+    confirmButtonText: t('common.confirm'),
+    cancelButtonText: t('common.cancel'),
+  }).catch(() => false)
+  if (!ok) return
+  logout()
+}
+
+async function logout() {
+  // Best-effort server-side session invalidation; local state is always
+  // cleared even if the call fails (offline/expired session).
+  try {
+    await api.post('/v1/admin/auth/logout')
+  } catch {
+    // ignore: local cleanup below is authoritative for the console
+  }
   auth.clear()
   router.push('/login')
 }
@@ -52,4 +115,6 @@ function logout() {
 .aside { background: #fff; border-right: 1px solid var(--adc-border); }
 .brand { height: 56px; display: flex; align-items: center; padding: 0 16px; font-weight: 600; color: var(--adc-brand); }
 .header { display: flex; align-items: center; justify-content: space-between; background: #fff; border-bottom: 1px solid var(--adc-border); }
+.page-title { font-weight: 600; }
+.user { display: inline-flex; align-items: center; gap: var(--adc-space-2); cursor: pointer; color: var(--adc-text); }
 </style>
