@@ -1,0 +1,40 @@
+[project]
+name = "adc-core-sdk"
+version = "0.1.0"
+description = "ADC device-plane wire protocol types for Python (Apache-2.0)"
+requires-python = ">=3.14"
+license = "Apache-2.0"
+dependencies = [
+    "pydantic>=2.12,<3",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+    "ruff>=0.11",
+    "mypy>=1.17",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["adc_core_sdk"]
+
+[tool.ruff]
+target-version = "py314"
+line-length = 100
+src = ["adc_core_sdk", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM"]
+
+[tool.mypy]
+python_version = "3.14"
+strict = true
+plugins = ["pydantic.mypy"]
+files = ["adc_core_sdk"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

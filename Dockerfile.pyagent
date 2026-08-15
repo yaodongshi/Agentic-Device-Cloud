@@ -1,0 +1,22 @@
+# ADC Python agent plane image: uv-managed deps, wheelhouse-cached, non-root
+# (design/60 2.2). The venv must live at the SAME absolute path in both
+# stages: venv scripts hard-code their interpreter path, so the build stage
+# installs to /app/.venv and the final stage copies the whole /app.
+
+FROM python:3.14-slim AS build
+ENV UV_NO_CACHE=1 UV_COMPILE_BYTECODE=1
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+WORKDIR /app
+COPY core-sdk/python/ /app/core-sdk/python/
+COPY ce/py-agent/ /app/ce/py-agent/
+WORKDIR /app/ce/py-agent
+RUN uv sync --frozen --no-dev --no-editable
+
+FROM python:3.14-slim
+RUN useradd -u 10001 -m appuser
+COPY --from=build /app /app
+ENV PATH="/app/ce/py-agent/.venv/bin:$PATH" PYTHONPATH="/app/ce/py-agent"
+WORKDIR /app/ce/py-agent
+USER 10001:10001
+EXPOSE 18081
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "18081"]

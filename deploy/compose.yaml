@@ -1,0 +1,125 @@
+# ADC 全栈 Compose（完全独立：项目名 adc、网络 adc-net、卷 adc_*、专用端口）
+# 服务：gateway(唯一对外入口) / adc(Go 数据面单进程) / py-agent(Python Agent 面) / postgres / valkey
+# 与用户机器上任何既有 Compose/容器互不干扰，绝不复用其网络与卷。
+# 用法：docker compose -f deploy/compose.yaml up -d --build
+name: adc
+
+networks:
+  adc-net:
+    driver: bridge
+
+volumes:
+  adc_pg_data: {}
+  adc_valkey_data: {}
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: adc-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${ADC_PG_USER:-adc}
+      POSTGRES_PASSWORD: ${ADC_PG_PASSWORD:-adc_dev_only}
+      POSTGRES_DB: ${ADC_PG_DBNAME:-adc}
+    volumes:
+      - adc_pg_data:/var/lib/postgresql/data
+      - ../ce/migrations:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    networks: [adc-net]
+
+  valkey:
+    image: valkey/valkey:8-alpine
+    container_name: adc-valkey
+    restart: unless-stopped
+    command: ["valkey-server", "--requirepass", "${ADC_VALKEY_PASSWORD:-adc_dev_only}"]
+    volumes:
+      - adc_valkey_data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "valkey-cli -a $${ADC_VALKEY_PASSWORD:-adc_dev_only} ping | grep -q PONG"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    networks: [adc-net]
+
+  adc:
+    build:
+      context: ..
+      dockerfile: Dockerfile.adc
+    image: adc/ce:dev
+    container_name: adc-app
+    restart: unless-stopped
+    command: ["-seed"]
+    ports:
+      - "127.0.0.1:18082:8080"
+    environment:
+      ADC_ENV: dev
+      ADC_LOG_LEVEL: info
+      ADC_HTTP_ADDR: ":8080"
+      ADC_NODE_ID: adc-node-01
+      ADC_DEVICE_KEK: ${ADC_DEVICE_KEK:-00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff}
+      PG_HOST: postgres
+      PG_PORT: "5432"
+      PG_USER: ${ADC_PG_USER:-adc}
+      PG_PASSWORD: ${ADC_PG_PASSWORD:-adc_dev_only}
+      PG_DBNAME: ${ADC_PG_DBNAME:-adc}
+      PG_SSLMODE: disable
+      VALKEY_ADDR: valkey:6379
+      VALKEY_PASSWORD: ${ADC_VALKEY_PASSWORD:-adc_dev_only}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      valkey:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O- http://127.0.0.1:8080/healthz || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+    networks: [adc-net]
+
+  py-agent:
+    build:
+      context: ..
+      dockerfile: Dockerfile.pyagent
+    image: adc/py-agent:dev
+    container_name: adc-py-agent
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:18081/healthz')\" || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    networks: [adc-net]
+
+  gateway:
+    build:
+      context: ..
+      dockerfile: Dockerfile.adc
+    image: adc/ce:dev
+    container_name: adc-gateway
+    restart: unless-stopped
+    entrypoint: ["/usr/local/bin/gateway"]
+    environment:
+      ADC_HTTP_ADDR: ":8080"
+      ADC_BACKEND_ADMIN: "http://adc:8080"
+      ADC_BACKEND_AGENTAPI: "http://adc:8080"
+      ADC_BACKEND_CONNECTOR: "http://adc:8080"
+      ADC_BACKEND_APPROVAL: "http://adc:8080"
+      ADC_BACKEND_PYAGENT: "http://py-agent:18081"
+    ports:
+      - "18080:8080"
+    depends_on:
+      adc:
+        condition: service_healthy
+      py-agent:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O- http://127.0.0.1:8080/healthz || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+    networks: [adc-net]

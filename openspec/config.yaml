@@ -1,0 +1,23 @@
+schema: spec-driven
+
+context: |
+  Project: Agentic Device Cloud (ADC) — AI 原生设备编排与治理平台（设备即 MCP 工具节点）。
+  Repo stage: 产品化规划完成、无生产代码（网关 PoC 代码存于 doc/Agentic Device Cloud.md 内嵌）。
+  Working language: 文档全中文、无 emoji；代码注释英文。
+  Tech stack: Go 后端 + Vue 3 前端 + PostgreSQL + Valkey（替代 Redis）+ NATS JetStream + MCP（Streamable HTTP）/ A2A v1.0。
+  Strategy baseline (authoritative, keep all docs consistent):
+    - Odoo 双版本开源：core-sdk/(Apache-2.0) + ce/(LGPL-3) + ee/(源码可见商业许可，禁止再分发)
+    - 设备主线：原生 MCP Server 设备鉴权绑定（OAuth 2.1），WSS 隧道为 Legacy Bridge
+    - A2A 多 Agent 协同编排 + 全栈 i18n（中英首发，全球双主场）
+  Doc suite: doc/01~07 为调研与规划基线（市场/竞品/PRD/商业模式/架构评审/开源战略/设备与A2A方案），doc/Agentic Device Cloud.md 为技术 PoC 基线。
+  Expert skills: .opencode/skills/ 下 28 位专家角色技能，产品级工作必须先经 skill 工具加载对应专家（详见根 AGENTS.md）。
+  Conventions: 所有测算数字必须标注来源或"假设"；跨文档共享基线改动需全量扫描残留表述；openspec 变更用 /opsx-propose 提出、/opsx-apply 执行。
+
+rules:
+  proposal:
+    - Keep proposals under 500 words unless domain complexity requires more
+    - Always include a "非目标" (Non-goals) section
+    - Reference doc/ 基线文档编号（如 SEC-xx/FR-xx/ADR-xx）而非重复其内容
+  tasks:
+    - Break tasks into chunks of max 2 hours
+    - Tasks must be verifiable; security fixes must cite SEC-xx ids and verification method

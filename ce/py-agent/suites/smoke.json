@@ -1,0 +1,27 @@
+{
+  "suite": "smoke",
+  "tenant": "demo",
+  "cases": [
+    {
+      "name": "reboot ok",
+      "tool": "dev-001::reboot",
+      "args": {"delay_ms": 500},
+      "expect_status": "ok"
+    },
+    {
+      "name": "telemetry ok",
+      "tool": "dev-001::get_telemetry",
+      "expect_status": "ok"
+    },
+    {
+      "name": "set mode blocked",
+      "tool": "dev-002::set_mode",
+      "expect_status": "blocked"
+    },
+    {
+      "name": "missing tool errors",
+      "tool": "dev-003::ghost",
+      "expect_status": "error"
+    }
+  ]
+}
