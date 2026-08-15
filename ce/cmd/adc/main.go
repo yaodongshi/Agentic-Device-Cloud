@@ -21,6 +21,8 @@ import (
 
 	"github.com/redis/go-redis/v9"
 
+	"adc.dev/ce/internal/adminapi"
+	"adc.dev/ce/internal/adminauth"
 	"adc.dev/ce/internal/agentapi"
 	"adc.dev/ce/internal/agentapi/route"
 	"adc.dev/ce/internal/agentauth"
@@ -35,6 +37,11 @@ import (
 	"adc.dev/ce/pkg/observe"
 	"adc.dev/ce/pkg/ratelimit"
 )
+
+// demoAdminPassword is the default password of the seeded admin account
+// (dev only, -seed flag). It is printed at seed time so operators know to
+// change it before the database is shared outside a developer machine.
+const demoAdminPassword = "admin123!"
 
 func main() {
 	var seed bool
@@ -79,6 +86,8 @@ func main() {
 			fatal(serr)
 		}
 		log.Info("seeded demo tenant/device/tool", "device_code", "cnc-demo-01", "secret", secret)
+		log.Info("seeded demo admin account", "username", "admin", "password", demoAdminPassword,
+			"note", "dev default, change it before any shared environment")
 		_ = os.WriteFile("/tmp/adc-demo-secret", []byte(secret), 0o600)
 	}
 	var tenantID string
@@ -188,6 +197,25 @@ func main() {
 
 	callbackHandler := approval.NewCallbackHandler(ticketRepo, wakeBus, cfg.HITLCallbackKey)
 
+	// --- admin api + session auth (design/80 B-01..B-06): production
+	// wiring with the PG repos and the Valkey session store. The
+	// dev authValidator above is Agent-side only and never guards the
+	// Admin surface; admins authenticate through adminauth against
+	// adc_users (seeded by -seed).
+	sessions := adminauth.NewValkeySessionStore(rdb)
+	authHandler := adminauth.NewHandler(adminauth.NewPGUserStore(pool.Pool), sessions)
+	adminSrv := adminapi.NewServer(
+		adminapi.NewPGTenantRepo(pool.Pool),
+		adminapi.NewPGDeviceRepo(pool.Pool),
+		adminapi.NewPGApiKeyRepo(pool.Pool),
+		sessions)
+	adminSrv.KEK = kek
+	adminSrv.Tools = adminapi.NewPGToolRepo(pool.Pool)
+	adminSrv.Policies = adminapi.NewPGPolicyRepo(pool.Pool)
+	adminSrv.AuditQuery = adminapi.NewPGAuditQueryRepo(pool.Pool)
+	adminSrv.Audit = &adminAuditSink{inner: audit.NewValkeySink(rdb)}
+	adminHandler := adminSrv.Handler()
+
 	// --- agent api quota + rate limit wiring (design/80 B-10, SEC-12) ---
 	// The Agent API routes get a sub-mux so the quota gate and rate
 	// limiter wrap only agent endpoints. Order per design/31 3.2.3:
@@ -207,6 +235,7 @@ func main() {
 	)(agentapi.QuotaMiddleware(quotaGate)(agentMux))
 
 	mux := http.NewServeMux()
+	mux.Handle("/v1/admin/", combinedAdminHandler(authHandler.Routes(), adminHandler))
 	mux.Handle("/v1/agent/mcp/", agentChain)
 	callbackHandler.Routes(mux)
 	mux.Handle("GET /v1/devices/tunnel", tunnel)
@@ -222,6 +251,7 @@ func main() {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		items := []string{
 			`<li><a href="/healthz">/healthz</a> 健康检查</li>`,
+			`<li>POST /v1/admin/auth/login（控制台管理员登录，默认账号 admin）</li>`,
 			`<li>GET /v1/agent/mcp/tools（需 X-ADC-Key 头）</li>`,
 			`<li>POST /v1/agent/mcp/tools/call（需 X-ADC-Key 头）</li>`,
 			`<li>GET /v1/devices/tunnel（设备 WSS 隧道）</li>`,
@@ -311,6 +341,46 @@ func main() {
 func fatal(err error) {
 	fmt.Fprintln(os.Stderr, "fatal:", err)
 	os.Exit(1)
+}
+
+// combinedAdminHandler dispatches the /v1/admin/ subtree between the auth
+// endpoints (POST /v1/admin/auth/login|logout) and the Admin API. Both
+// child muxes register absolute-path patterns and receive the unmodified
+// request path, so plain prefix dispatch is sufficient.
+func combinedAdminHandler(authHandler, adminHandler http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/v1/admin/auth/") {
+			authHandler.ServeHTTP(w, r)
+			return
+		}
+		adminHandler.ServeHTTP(w, r)
+	})
+}
+
+// adminAuditSink adapts adminapi.AuditSink onto the pkg/audit Valkey
+// pipeline (SEC-07). Emission is best-effort by contract: the pkg/audit
+// worker currently stamps tool_call/agent at insert time (worker.go
+// insertSQL), so admin ops do not yet carry the admin_op shape on
+// adc_audit_logs; wiring the sink keeps the seam active until the audit
+// package grows an admin-shaped event (see the AuditSink note in
+// internal/adminapi/server.go).
+type adminAuditSink struct {
+	inner *audit.ValkeySink
+}
+
+func (a *adminAuditSink) Record(ctx context.Context, op adminapi.AdminOp) error {
+	if a == nil || a.inner == nil {
+		return nil
+	}
+	return a.inner.Enqueue(ctx, &audit.AuditEvent{
+		EventID:   op.EventID,
+		TenantID:  op.TenantID,
+		AgentID:   op.ActorID,
+		Params:    op.Details,
+		Status:    audit.StatusSuccess,
+		TraceID:   op.TraceID,
+		CreatedAt: op.CreatedAt,
+	})
 }
 
 // loadNodeKey returns the cluster node signing key (SEC-06). Production
@@ -589,8 +659,10 @@ func toolRows(pool *db.Pool) agentapi.ToolRows {
 }
 
 // seedDemo inserts a demo tenant, device (hmac, KEK-encrypted secret) and a
-// high-risk tool for the smoke flow. The plaintext secret is returned once
-// for the mock device.
+// high-risk tool for the smoke flow, plus the admin bootstrap: the system
+// roles (PLATFORM_ADMIN / TENANT_ADMIN / APPROVER / AUDITOR) and the default
+// admin account (username admin, password demoAdminPassword, dev only). The
+// plaintext device secret is returned once for the mock device.
 func seedDemo(ctx context.Context, pool *db.Pool, kek []byte) (string, error) {
 	if _, err := pool.Exec(ctx, `INSERT INTO adc_tenants (id, code, name, status)
 		SELECT gen_random_uuid(), 'tenant-demo', 'Demo', 'ACTIVE'
@@ -622,6 +694,55 @@ func seedDemo(ctx context.Context, pool *db.Pool, kek []byte) (string, error) {
 		SELECT gen_random_uuid(), d.tenant_id, d.id, 'set_spindle_speed', 'Set CNC spindle RPM (high risk)', '{"type":"object","properties":{"rpm":{"type":"number"}}}', 2, true
 		FROM adc_devices d WHERE d.device_code='cnc-demo-01'
 		AND NOT EXISTS (SELECT 1 FROM adc_device_tools t WHERE t.device_id=d.id AND t.tool_name='set_spindle_speed')`); err != nil {
+		return "", err
+	}
+
+	// --- admin bootstrap (design/80 B-01): system roles + default admin ---
+	// Role codes keep the design/32 uppercase spelling; PGUserStore
+	// lowercases them on load because the RBAC matrix matches the
+	// design/33 3.1.18 lowercase names. All steps are idempotent.
+	roleSteps := []string{
+		`INSERT INTO adc_roles (tenant_id, role_code, scope, description, permissions, is_system)
+		 VALUES (NULL, 'PLATFORM_ADMIN', 'PLATFORM', 'Platform administrator (system role)', '[]', TRUE)
+		 ON CONFLICT DO NOTHING`,
+		`INSERT INTO adc_roles (tenant_id, role_code, scope, description, permissions, is_system)
+		 SELECT id, 'TENANT_ADMIN', 'TENANT', 'Tenant administrator (system role)', '[]', TRUE
+		 FROM adc_tenants WHERE code='tenant-demo' ON CONFLICT DO NOTHING`,
+		`INSERT INTO adc_roles (tenant_id, role_code, scope, description, permissions, is_system)
+		 SELECT id, 'APPROVER', 'TENANT', 'Approval approver (system role)', '[]', TRUE
+		 FROM adc_tenants WHERE code='tenant-demo' ON CONFLICT DO NOTHING`,
+		`INSERT INTO adc_roles (tenant_id, role_code, scope, description, permissions, is_system)
+		 SELECT id, 'AUDITOR', 'TENANT', 'Audit auditor (system role)', '[]', TRUE
+		 FROM adc_tenants WHERE code='tenant-demo' ON CONFLICT DO NOTHING`,
+	}
+	for _, q := range roleSteps {
+		if _, err := pool.Exec(ctx, q); err != nil {
+			return "", err
+		}
+	}
+	passHash, err := adminauth.HashPassword(demoAdminPassword)
+	if err != nil {
+		return "", err
+	}
+	// Insert the admin user when absent, then force the documented dev
+	// password on every seed run so the console login always works out
+	// of the box.
+	if _, err := pool.Exec(ctx, `INSERT INTO adc_users (tenant_id, username, display_name, password_hash, auth_source, status)
+		SELECT id, 'admin', 'Platform Admin', $1, 'LOCAL', 'ACTIVE'
+		FROM adc_tenants WHERE code='tenant-demo'
+		ON CONFLICT DO NOTHING`, passHash); err != nil {
+		return "", err
+	}
+	if _, err := pool.Exec(ctx, `UPDATE adc_users
+		SET password_hash=$1, status='ACTIVE', updated_at=now()
+		WHERE username='admin' AND deleted_at IS NULL`, passHash); err != nil {
+		return "", err
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO adc_user_roles (user_id, role_id, tenant_id)
+		SELECT u.id, r.id, u.tenant_id FROM adc_users u
+		JOIN adc_roles r ON r.role_code='PLATFORM_ADMIN' AND r.scope='PLATFORM'
+		WHERE u.username='admin'
+		ON CONFLICT DO NOTHING`); err != nil {
 		return "", err
 	}
 	return secret, nil
