@@ -13,7 +13,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-## [0.1.0] - TBD
+## [0.1.0] - 2026-08-15
+
+### Added
+- Phase 0 security hardening complete (SEC-01~14, 20/20 openspec tasks)
+- Unified API gateway (Plan A: Go data plane + Python agent plane, frontend-agnostic)
+- Device connector (WSS tunnel, HMAC+nonce auth, kick-old, TTL renewal)
+- Agent API (tool aggregation, DB risk policy, 202-pending HITL flow, BLOCKED_BY_HITL)
+- Approval service (PG CAS state machine, signed callbacks, WeCom/DingTalk notifiers)
+- Audit pipeline (at-least-once, partitioned, 180d retention) + metering + rate limiting
+- Admin API (tenants/devices/api-keys/risk policies/audit query) + session auth + RBAC
+- Management console (Vue 3: devices, tools & risk, approvals, audit, api-keys, tenants, monitor)
+- Python agent plane (FastAPI eval harness, v1.0 minimal set)
+- Rust edge SDK (WSS client, backoff reconnect, tool registry, echo + modbus examples)
+- Docker compose stack (gateway/adc/py-agent/postgres/valkey, multi-arch images)
+- CI/CD (go/python/console/docker workflows), observability (prometheus/grafana), backup scripts
+- Bilingual docs site (VitePress), community files, DJ gap analysis
 
 Initial ADC platform MVP release (release date to be filled in by the release
 workflow owner when the v0.1.0 tag is cut).
