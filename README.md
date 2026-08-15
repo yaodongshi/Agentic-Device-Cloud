@@ -1,6 +1,6 @@
 <p align="center">
   <h1 align="center">Agentic Device Cloud (ADC)</h1>
-  <p align="center"><strong>An AI-native device orchestration &amp; governance platform — turn every machine into a governed MCP tool node.</strong></p>
+  <p align="center"><strong>An AI-native device orchestration & governance platform — turn every machine into a governed MCP tool node.</strong></p>
 </p>
 
 <p align="center">
@@ -11,7 +11,7 @@
   <img src="https://img.shields.io/badge/status-Early%20Development-orange" alt="Status">
 </p>
 
-> 中文简介见文末 [项目简介（中文）](#项目简介中文)。发起公司：广州中迪科技（Zodioo），见 [Company](#company)。
+> 中文简介见文末 [项目简介（中文）](#项目简介中文)。发起公司：广州众谛信息科技有限公司（Zodioo），见 [Company](#company)。
 
 ---
 
@@ -43,15 +43,15 @@ External orchestrators (A2A)
 
 ## Core capabilities
 
-| Capability | Description |
-|-----------|-------------|
-| **Device as MCP node** | Devices register their toolchains (`tools/list`) over a NAT-piercing WSS reverse tunnel |
-| **HITL approval firewall** | High-risk operations (risk level 0-3) are blocked until a human approves via WeCom/DingTalk interactive cards — model hallucinations cannot touch physical machines |
-| **Virtual MCP aggregation** | One namespaced MCP endpoint per tenant; any MCP-compatible agent plugs in with zero changes |
-| **Multi-tenant governance** | Tenants, RBAC, quotas, API keys, append-only audit trail (180+ days, partitioned) |
-| **Unified API gateway** | Single entrypoint routing to Go data plane and Python agent plane — frontends never see the language split |
-| **Security baseline** | HMAC+nonce device auth, TLS everywhere, Valkey (not Redis — licensing), rate limiting, KEK-encrypted credentials |
-| **Open Odoo-style dual edition** | CE (LGPL-3) free &amp; self-hostable; EE (source-visible commercial) adds governance/scale/compliance modules |
+| Capability                             | Description                                                                                                                                                          |
+| -------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Device as MCP node**           | Devices register their toolchains (`tools/list`) over a NAT-piercing WSS reverse tunnel                                                                            |
+| **HITL approval firewall**       | High-risk operations (risk level 0-3) are blocked until a human approves via WeCom/DingTalk interactive cards — model hallucinations cannot touch physical machines |
+| **Virtual MCP aggregation**      | One namespaced MCP endpoint per tenant; any MCP-compatible agent plugs in with zero changes                                                                          |
+| **Multi-tenant governance**      | Tenants, RBAC, quotas, API keys, append-only audit trail (180+ days, partitioned)                                                                                    |
+| **Unified API gateway**          | Single entrypoint routing to Go data plane and Python agent plane — frontends never see the language split                                                          |
+| **Security baseline**            | HMAC+nonce device auth, TLS everywhere, Valkey (not Redis — licensing), rate limiting, KEK-encrypted credentials                                                    |
+| **Open Odoo-style dual edition** | CE (LGPL-3) free&amp; self-hostable; EE (source-visible commercial) adds governance/scale/compliance modules                                                         |
 
 ## Quick start
 
@@ -89,16 +89,16 @@ openspec/   spec-driven change management
 
 ## Roadmap
 
-| Milestone | Scope |
-|-----------|-------|
-| ✅ Phase 0 | Security hardening (SEC-01~14), dual-repo licenses, Docker stack, 10/10 smoke |
+| Milestone         | Scope                                                                                                                                                 |
+| ----------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| ✅ Phase 0        | Security hardening (SEC-01~14), dual-repo licenses, Docker stack, 10/10 smoke                                                                         |
 | Sprint 3-9 (V1.0) | Admin API + management console, production HITL (WeCom/DingTalk), cluster routing, edge SDK (Rust box + C demo), CI/CD, docs site, open-source launch |
-| V1.5 | Native MCP device onboarding (OAuth 2.1), full Python agent plane (LLM gateway, A2A agent card, four-agent orchestration), i18n UI |
-| V2.0 | Protocol adapter ecosystem (FANUC/Siemens/Modbus/OPC-UA), OEM white-label, tool marketplace |
+| V1.5              | Native MCP device onboarding (OAuth 2.1), full Python agent plane (LLM gateway, A2A agent card, four-agent orchestration), i18n UI                    |
+| V2.0              | Protocol adapter ecosystem (FANUC/Siemens/Modbus/OPC-UA), OEM white-label, tool marketplace                                                           |
 
 ## Company
 
-**ADC is initiated and sponsored by [Zodioo / 广州中迪科技](https://www.zodioo.com/).**
+**ADC is initiated and sponsored by [Zodioo / 广州众谛信息科技](https://www.zodioo.com/).**
 
 Guangzhou Zhongdi Technology (Zodioo) is an Odoo open-source ERP service provider based in Guangzhou, China. The company delivers Odoo implementation, customization, upgrades and training, with industry solutions for discrete manufacturing, cosmetics/daily-chemicals, cross-border trade &amp; e-commerce, and retail. Rooted in "共同合作，构建开源" (collaborate and build open source), Zodioo brings its years of enterprise digitalization experience to ADC — extending the Odoo-style dual-edition open source philosophy into the AI-native device orchestration domain.
 
@@ -106,11 +106,11 @@ Guangzhou Zhongdi Technology (Zodioo) is an Odoo open-source ERP service provide
 
 Layered licensing (see [LICENSE](LICENSE)):
 
-| Directory | License |
-|-----------|---------|
+| Directory     | License                                 |
+| ------------- | --------------------------------------- |
 | `core-sdk/` | Apache-2.0 (embeddable in OEM firmware) |
-| `ce/` | GNU LGPL-3.0 |
-| `ee/` | Source-visible commercial license |
+| `ce/`       | GNU LGPL-3.0                            |
+| `ee/`       | Source-visible commercial license       |
 
 ## Contributing
 
