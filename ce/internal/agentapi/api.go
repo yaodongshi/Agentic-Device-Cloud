@@ -88,6 +88,16 @@ type ToolAggregator interface {
 	Resolve(ctx context.Context, tenantID, qualifiedName string) (ToolRef, error)
 }
 
+// DeviceOwnerCheck reports whether the device (by device_code) exists in
+// the caller's tenant ledger. It must return ErrDeviceNotOwned when the
+// device does not belong to the tenant (tenant isolation, SEC-02) and
+// propagate any real lookup failure as a different error.
+type DeviceOwnerCheck func(ctx context.Context, tenantID, deviceCode string) error
+
+// ErrDeviceNotOwned marks a tool call whose device is not registered to
+// the caller's tenant (design/33 13007: explicit 403, no existence leak).
+var ErrDeviceNotOwned = errors.New("agentapi: device not owned by tenant")
+
 // RPCClient is the minimal session interface the router needs (design/31
 // 3.2.2); connector.DeviceSession satisfies it.
 type RPCClient interface {

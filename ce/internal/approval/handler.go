@@ -36,7 +36,8 @@ const (
 )
 
 // Callback decision errors, mapped to design/33 approval error codes by the
-// handlers (12004 signature / 10001 invalid decision).
+// handlers (12004 signature 401 / 12001 unknown 404 / 12002 handled 409 /
+// 12003 expired 403 / 10001 invalid decision 400).
 var (
 	ErrCallbackSignature = errors.New("approval: callback signature verification failed")
 	ErrBadDecision       = errors.New("approval: decision must be approve or reject")
@@ -157,8 +158,14 @@ func (h *CallbackHandler) handleCallbackJSON(w http.ResponseWriter, r *http.Requ
 		httpx.WriteError(w, http.StatusBadRequest, "10001", "invalid json", httpx.TraceIDFrom(r))
 		return
 	}
-	if req.TicketID == "" || req.Signature == "" || req.Expire == 0 {
-		httpx.WriteError(w, http.StatusBadRequest, "10001", "ticket_id, signature and expire are required", httpx.TraceIDFrom(r))
+	if req.TicketID == "" || req.Expire == 0 {
+		httpx.WriteError(w, http.StatusBadRequest, "10001", "ticket_id and expire are required", httpx.TraceIDFrom(r))
+		return
+	}
+	// A missing signature is an authentication failure (design/33 12004:
+	// 401), distinct from the 400 of a missing ticket_id/expire.
+	if req.Signature == "" {
+		httpx.WriteError(w, http.StatusUnauthorized, "12004", "callback signature required", httpx.TraceIDFrom(r))
 		return
 	}
 	updated, err := h.decide(r.Context(), req)

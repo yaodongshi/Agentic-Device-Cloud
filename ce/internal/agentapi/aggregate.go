@@ -28,6 +28,7 @@ type DBAggregator struct {
 	Rows       ToolRows
 	Lookup     RiskLookup
 	UUIDLookup DeviceUUIDLookup // fills DeviceUUID for audit (may be nil)
+	OwnerCheck DeviceOwnerCheck // tenant ownership gate (may be nil)
 }
 
 // DeviceUUIDLookup resolves adc_devices.id by device_code.
@@ -53,12 +54,18 @@ func (a DBAggregator) List(ctx context.Context, tenantID string) ([]protocol.MCP
 	return out, nil
 }
 
-// Resolve parses the qualified name and loads the persisted risk level
+// Resolve parses the qualified name, rejects devices outside the caller's
+// tenant (design/33 13007, SEC-02) and loads the persisted risk level
 // (default 2, SEC-09).
 func (a DBAggregator) Resolve(ctx context.Context, tenantID, qualifiedName string) (ToolRef, error) {
 	ref, err := ParseToolRef(qualifiedName)
 	if err != nil {
 		return ToolRef{}, err
+	}
+	if a.OwnerCheck != nil {
+		if err := a.OwnerCheck(ctx, tenantID, ref.DeviceID); err != nil {
+			return ToolRef{}, err
+		}
 	}
 	level, err := a.Lookup(ctx, tenantID, ref.DeviceID, ref.ToolName)
 	if err != nil || level < 0 || level > 3 {

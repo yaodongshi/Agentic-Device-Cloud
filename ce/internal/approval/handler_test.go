@@ -288,13 +288,39 @@ func TestCallbackMalformedJSONAndMissingFields(t *testing.T) {
 	}
 
 	for name, body := range map[string]map[string]any{
-		"missing signature": {"ticket_id": "x", "decision": "approve", "expire": 1},
-		"missing expire":    {"ticket_id": "x", "decision": "approve", "signature": "s"},
-		"missing ticket":    {"decision": "approve", "signature": "s", "expire": 1},
+		"missing expire": {"ticket_id": "x", "decision": "approve", "signature": "s"},
+		"missing ticket": {"decision": "approve", "signature": "s", "expire": 1},
 	} {
 		if w := postCallback(t, mux, body); w.Code != http.StatusBadRequest {
 			t.Errorf("%s status = %d, want 400", name, w.Code)
 		}
+	}
+}
+
+// TestCallbackMissingSignature: a callback without a signature is an
+// authentication failure, 401 code 12004 (design/33, SEC-01), and must not
+// touch the ticket.
+func TestCallbackMissingSignature(t *testing.T) {
+	clock := newFakeClock(fixedClock())
+	repo := newMemTicketRepo(clock)
+	bus := NewInMemoryEventBus()
+	id := seedTicket(t, repo, clock)
+	mux := newTestMux(repo, clock, bus)
+
+	w := postCallback(t, mux, map[string]any{
+		"ticket_id": id,
+		"decision":  "approve",
+		"expire":    clock.Now().Add(DefaultExpiry).Unix(),
+	})
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401, body=%s", w.Code, w.Body.String())
+	}
+	if code := errorCode(t, w); code != "12004" {
+		t.Errorf("code = %s, want 12004", code)
+	}
+	stored, _ := repo.Get(context.Background(), id)
+	if stored.Status != StatusPending {
+		t.Errorf("status = %q after unsigned callback, want PENDING", stored.Status)
 	}
 }
 

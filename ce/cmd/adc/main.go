@@ -113,7 +113,7 @@ func main() {
 
 	// --- agent api (SEC-02/09) ---
 	policy := agentapi.DBPolicy{Lookup: riskLookup(pool)}
-	agg := agentapi.DBAggregator{Rows: toolRows(pool), Lookup: riskLookup(pool), UUIDLookup: deviceUUIDLookup(pool)}
+	agg := agentapi.DBAggregator{Rows: toolRows(pool), Lookup: riskLookup(pool), UUIDLookup: deviceUUIDLookup(pool), OwnerCheck: ownerCheck(pool)}
 	localRouter := agentapi.LocalRouter{Session: func(ctx context.Context, tenantID, deviceID string) (agentapi.RPCClient, error) {
 		sess, err := hub.GetDevice(tenantID, deviceID)
 		if err != nil {
@@ -608,6 +608,26 @@ func deviceUUIDLookup(pool *db.Pool) agentapi.DeviceUUIDLookup {
 			`SELECT id::text FROM adc_devices WHERE tenant_id=$1::uuid AND device_code=$2`,
 			tenantID, deviceCode).Scan(&uuid)
 		return uuid, err
+	}
+}
+
+// ownerCheck is the tenant ownership gate of the tool call path
+// (design/33 13007, SEC-02): a device not present in the caller's tenant
+// ledger yields agentapi.ErrDeviceNotOwned, which the Agent API maps to an
+// explicit 403 instead of a generic 500.
+func ownerCheck(pool *db.Pool) agentapi.DeviceOwnerCheck {
+	return func(ctx context.Context, tenantID, deviceCode string) error {
+		var exists bool
+		err := pool.QueryRow(ctx,
+			`SELECT EXISTS(SELECT 1 FROM adc_devices WHERE tenant_id=$1::uuid AND device_code=$2)`,
+			tenantID, deviceCode).Scan(&exists)
+		if err != nil {
+			return err
+		}
+		if !exists {
+			return agentapi.ErrDeviceNotOwned
+		}
+		return nil
 	}
 }
 

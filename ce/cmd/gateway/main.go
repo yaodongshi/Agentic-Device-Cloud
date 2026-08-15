@@ -17,10 +17,30 @@ import (
 
 	"adc.dev/ce/internal/gateway"
 	"adc.dev/ce/pkg/observe"
+	"adc.dev/ce/pkg/ratelimit"
+
+	"github.com/redis/go-redis/v9"
 )
 
 func main() {
 	addr := getenv("ADC_HTTP_ADDR", ":8080")
+
+	// Rate limiter (B-10): real token buckets over Valkey. Disabled when no
+	// Valkey address is configured (local smoke without infra).
+	var rateLimiter gateway.RateLimiter
+	if va := os.Getenv("VALKEY_ADDR"); va != "" {
+		store := ratelimit.NewValkeyStore(redis.NewClient(&redis.Options{
+			Addr:     va,
+			Username: os.Getenv("VALKEY_USERNAME"),
+			Password: os.Getenv("VALKEY_PASSWORD"),
+		}))
+		if lim, err := ratelimit.NewTokenBucket(store, nil); err == nil {
+			rateLimiter = gatewayRateLimiter{lim}
+		} else {
+			slog.Warn("gateway: rate limiter disabled", "err", err)
+		}
+	}
+
 	cfg := gateway.Config{
 		Addr: addr,
 		Backends: gateway.Backends{
@@ -35,6 +55,7 @@ func main() {
 		HealthProbeTimeout: 2 * time.Second,
 		ReadHeaderTimeout:  10 * time.Second,
 		IdleTimeout:        120 * time.Second,
+		RateLimiter:        rateLimiter,
 		ErrorLog:           slog.NewLogLogger(slog.NewTextHandler(os.Stderr, nil), slog.LevelError),
 	}
 
@@ -64,6 +85,7 @@ func main() {
 <li>/v2/agents/evals/*（Python Agent 面评测，经网关路由）</li>
 </ul></body></html>`)
 	})
+	outer.Handle("GET /metrics", obs.Handler)
 	outer.Handle("/", observe.Middleware(obs.HTTPRequests, obs.HTTPRequestDuration, nil)(srv.Handler))
 	srv.Handler = outer
 
@@ -139,4 +161,26 @@ func getenvBool(key string, def bool) bool {
 		return b
 	}
 	return def
+}
+
+// gatewayRateLimiter adapts the scope-typed ratelimit limiter to the
+// gateway's string-scoped RateLimiter seam: "tenant"/"agent"/"device"
+// strings map onto the shared token-bucket store.
+type gatewayRateLimiter struct {
+	lim *ratelimit.TokenBucketLimiter
+}
+
+func (g gatewayRateLimiter) Allow(ctx context.Context, scope, key string) (bool, error) {
+	var s ratelimit.Scope
+	switch scope {
+	case "tenant":
+		s = ratelimit.ScopeTenant
+	case "agent":
+		s = ratelimit.ScopeAgent
+	case "device":
+		s = ratelimit.ScopeDevice
+	default:
+		return true, nil // unknown scopes pass; the gate is defense-in-depth
+	}
+	return g.lim.Allow(ctx, s, key)
 }

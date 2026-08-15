@@ -2,14 +2,14 @@
 
 ## 1. 契约决策与对齐
 
-- [ ] 1.1 免审响应信封：agentapi 免审路径 200 响应补充 request_id 字段（对齐 202 信封），集成断言更新
-- [ ] 1.2 回调错误码分级：approval CallbackHandler 错误路径改为 401/12004（无签名）、403/12003（过期）、404/12001（未知）、409/12002（已处理），handler_test 与 integration 断言更新
-- [ ] 1.3 跨租户显式 403：agentapi 调用路由中设备归属校验失败返回 403/13007（不再 500），integration 断言更新
+- [x] 1.1 免审响应信封：agentapi 免审路径 200 响应补充 request_id 字段（对齐 202 信封），集成断言更新
+- [x] 1.2 回调错误码分级：approval CallbackHandler 错误路径改为 401/12004（无签名）、403/12003（过期）、404/12001（未知）、409/12002（已处理），handler_test 与 integration 断言更新
+- [x] 1.3 跨租户显式 403：agentapi 调用路由中设备归属校验失败返回 403/13007（不再 500），integration 断言更新
 
 ## 2. 回归验证
 
-- [ ] 2.1 全量单测 + 集成测试通过（go test ./... -race + integration）
-- [ ] 2.2 design/33 相关小节措辞同步（若实现为准）并 commit
+- [x] 2.1 全量单测 + 集成测试通过（go test ./... -race + integration）
+- [x] 2.2 design/33 相关小节措辞同步（若实现为准）并 commit
 
 ## 依赖与顺序
 

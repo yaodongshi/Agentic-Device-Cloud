@@ -248,3 +248,72 @@ func TestInvalidToolRef(t *testing.T) {
 		t.Fatalf("want 400, got %d", w.Code)
 	}
 }
+
+// TestLowRiskCallEnvelope: the direct (no-approval) 200 response carries
+// the request_id envelope field together with the result content, matching
+// the 202 HITL envelope (design/33 3.2.2).
+func TestLowRiskCallEnvelope(t *testing.T) {
+	policy := DBPolicy{Lookup: func(ctx context.Context, tenantID, deviceID, toolName string) (int, error) {
+		return 0, nil // level 0: no approval required
+	}}
+	agg := DBAggregator{
+		Lookup: func(ctx context.Context, tenantID, deviceID, toolName string) (int, error) {
+			return 0, nil
+		},
+	}
+	router := LocalRouter{Session: func(ctx context.Context, tenantID, deviceID string) (RPCClient, error) {
+		return rpcStub{exec: func(ctx context.Context, args map[string]interface{}) (string, error) {
+			return "ok", nil
+		}}, nil
+	}}
+	s := NewServer(validatorStub{}, agg, router, policy, NewInMemoryHITLClient())
+	w := doReq(t, s, "POST", "/v1/agent/mcp/tools/call", `{"name":"cnc-01::read_status","arguments":{}}`, "good-key")
+	if w.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d body=%s", w.Code, w.Body.String())
+	}
+	var env struct {
+		RequestID string `json:"request_id"`
+		Content   []struct {
+			Type string `json:"type"`
+			Text string `json:"text"`
+		} `json:"content"`
+		IsError bool `json:"is_error"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &env); err != nil {
+		t.Fatal(err)
+	}
+	if env.RequestID == "" {
+		t.Fatalf("missing request_id envelope: %s", w.Body.String())
+	}
+	if len(env.Content) == 0 || env.Content[0].Text != "ok" || env.IsError {
+		t.Fatalf("unexpected envelope result: %+v", env)
+	}
+}
+
+// TestCrossTenantCallRejected: a device outside the caller's tenant is an
+// explicit 403 code 13007 (design/33, SEC-02), not a 500.
+func TestCrossTenantCallRejected(t *testing.T) {
+	policy := DBPolicy{Lookup: func(ctx context.Context, tenantID, deviceID, toolName string) (int, error) {
+		return 0, nil
+	}}
+	agg := DBAggregator{
+		Lookup: func(ctx context.Context, tenantID, deviceID, toolName string) (int, error) {
+			return 0, nil
+		},
+		OwnerCheck: func(ctx context.Context, tenantID, deviceCode string) error {
+			return ErrDeviceNotOwned
+		},
+	}
+	router := LocalRouter{Session: func(ctx context.Context, tenantID, deviceID string) (RPCClient, error) {
+		t.Fatal("router must not be reached for a cross-tenant device")
+		return nil, nil
+	}}
+	s := NewServer(validatorStub{}, agg, router, policy, NewInMemoryHITLClient())
+	w := doReq(t, s, "POST", "/v1/agent/mcp/tools/call", `{"name":"other-tenant-cnc::set_rpm","arguments":{}}`, "good-key")
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("want 403, got %d body=%s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), CodeCrossTenant) {
+		t.Fatalf("want code %s in body: %s", CodeCrossTenant, w.Body.String())
+	}
+}

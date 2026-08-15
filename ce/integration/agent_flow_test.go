@@ -298,10 +298,9 @@ func TestAgentFlowFullChain(t *testing.T) {
 		t.Fatalf("aggregated tools incomplete: %q", rec.Body.String())
 	}
 
-	// 2. Low-risk direct call -> 200, device executed it. The V1 wire
-	//    shape for the direct path is the MCP ToolCallResult
-	//    (content + isError); request_id/status envelope fields are the
-	//    design/33 3.2.2 V1.5 MCP alignment follow-up.
+	// 2. Low-risk direct call -> 200, device executed it. The direct 200
+	//    response carries the request_id envelope together with the result
+	//    content (design/33 3.2.2).
 	rec = e.do(http.MethodPost, "/v1/agent/mcp/tools/call", map[string]any{
 		"name":      fx.code + "__get_spindle_status",
 		"arguments": map[string]any{"sample": "status"},
@@ -310,14 +309,18 @@ func TestAgentFlowFullChain(t *testing.T) {
 		t.Fatalf("low-risk call = %d (body=%q)", rec.Code, rec.Body.String())
 	}
 	var direct struct {
-		IsError bool `json:"is_error"`
-		Content []struct {
+		RequestID string `json:"request_id"`
+		IsError   bool   `json:"is_error"`
+		Content   []struct {
 			Type string `json:"type"`
 			Text string `json:"text"`
 		} `json:"content"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &direct); err != nil {
 		t.Fatalf("decode direct call: %v", err)
+	}
+	if direct.RequestID == "" {
+		t.Fatalf("direct call missing request_id envelope: %q", rec.Body.String())
 	}
 	if direct.IsError {
 		t.Fatalf("direct call = %+v", direct)
@@ -434,13 +437,13 @@ func TestAgentFlowCallbackSecurity(t *testing.T) {
 		t.Fatalf("load ticket: %v", err)
 	}
 
-	// No signature at all -> 400 code 10001 (the V1 handler treats the
-	// missing signature as a malformed request; unsigned callbacks never
-	// reach the state machine, SEC-01).
+	// No signature at all -> 401 code 12004 (design/33: a missing
+	// signature is an authentication failure, SEC-01; unsigned callbacks
+	// never reach the state machine).
 	rec = e.do(http.MethodPost, "/v1/hitl/callback", map[string]any{
 		"ticket_id": pending.TicketID, "decision": "approve", "expire": ticket.ExpireAt.Unix(),
 	}, nil)
-	wantErr(t, rec, http.StatusBadRequest, "10001")
+	wantErr(t, rec, http.StatusUnauthorized, "12004")
 
 	// Tampered signature -> 401 code 12004 (SEC-13).
 	bad := e.signedCallback(t, pending.TicketID, "approve", "it-approver", "x")
@@ -642,11 +645,9 @@ func TestAgentFlowTenantIsolation(t *testing.T) {
 
 	// Calling beta's tool with alpha's key (with or without a forged
 	// tenant header) must never execute it (SEC-02: tenant context comes
-	// from the key; the forged X-Tenant-ID header is ignored). The V1
-	// implementation fails closed on the unresolvable device binding
-	// with 500 (design/33 intends 11001/10003 here; contract drift
-	// noted) — the assertion pins "no cross-tenant execution": the
-	// forged header must not change the outcome either way.
+	// from the key; the forged X-Tenant-ID header is ignored). The device
+	// ownership check rejects the call explicitly with 403 code 13007
+	// (design/33 tenant isolation, previously fail-closed as 500).
 	for _, hdr := range []map[string]string{
 		{"X-ADC-Key": alphaKey},
 		{"X-ADC-Key": alphaKey, "X-Tenant-ID": betaID},
@@ -658,9 +659,7 @@ func TestAgentFlowTenantIsolation(t *testing.T) {
 		if rec.Code == http.StatusOK {
 			t.Fatalf("cross-tenant call executed: %q", rec.Body.String())
 		}
-		if rec.Code != http.StatusInternalServerError {
-			t.Fatalf("cross-tenant call = %d, want fail-closed 500 (body=%q)", rec.Code, rec.Body.String())
-		}
+		wantErr(t, rec, http.StatusForbidden, "13007")
 	}
 }
 

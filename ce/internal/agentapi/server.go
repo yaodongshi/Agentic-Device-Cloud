@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"sync"
@@ -17,10 +18,32 @@ import (
 )
 
 // BLOCKED_BY_HITL is the unified blocked-call error code (design/33 12006).
+// CodeCrossTenant is the tenant isolation error (design/33 13007, SEC-02).
 const (
 	CodeBlockedByHITL = "12006"
 	CodeToolNotFound  = "12004"
+	CodeCrossTenant   = "13007"
 )
+
+// toolCallEnvelope wraps an executed tool call result with its request_id
+// (design/33 3.2.2): the direct 200 response carries the same envelope field
+// as the 202 HITL response so clients can trace every call uniformly.
+type toolCallEnvelope struct {
+	RequestID string                 `json:"request_id"`
+	Content   []protocol.ToolContent `json:"content"`
+	IsError   bool                   `json:"is_error"`
+	TaskID    string                 `json:"task_id,omitempty"`
+	Accepted  bool                   `json:"accepted,omitempty"`
+}
+
+// envelopeResult wraps a CallResult in the wire envelope.
+func envelopeResult(requestID string, r *CallResult) toolCallEnvelope {
+	env := toolCallEnvelope{RequestID: requestID, IsError: r.IsError, TaskID: r.TaskID, Accepted: r.Accepted}
+	for _, c := range r.Content {
+		env.Content = append(env.Content, protocol.ToolContent{Type: c.Type, Text: c.Text})
+	}
+	return env
+}
 
 // Server wires the Agent API HTTP endpoints (design/33 3.2).
 type Server struct {
@@ -45,7 +68,7 @@ type pendingCall struct {
 	tenantID string
 	agentID  string
 	state    string // PENDING / EXECUTING / BLOCKED / DONE
-	out      *protocol.ToolCallResult
+	out      *CallResult
 }
 
 // NewServer builds a Server with sane defaults.
@@ -88,6 +111,13 @@ func (s *Server) handleToolCall(w http.ResponseWriter, r *http.Request) {
 	}
 	ref, err := s.Aggregator.Resolve(r.Context(), p.TenantID, req.Name)
 	if err != nil {
+		if errors.Is(err, ErrDeviceNotOwned) {
+			// Tenant isolation (design/33 13007, SEC-02): a device that
+			// does not exist in the caller's tenant must be an explicit
+			// 403, never a 500 hiding the reason.
+			httpx.WriteError(w, http.StatusForbidden, CodeCrossTenant, err.Error(), httpx.TraceIDFrom(r))
+			return
+		}
 		httpx.WriteError(w, http.StatusBadRequest, CodeToolNotFound, err.Error(), httpx.TraceIDFrom(r))
 		return
 	}
@@ -103,8 +133,9 @@ func (s *Server) handleToolCall(w http.ResponseWriter, r *http.Request) {
 			httpx.WriteError(w, http.StatusBadGateway, "12005", err.Error(), httpx.TraceIDFrom(r))
 			return
 		}
-		s.emitAudit(r, p, ref, req, audit.StatusSuccess, "")
-		httpx.WriteJSON(w, http.StatusOK, result)
+		requestID := newEventID()
+		s.emitAudit(r, p, ref, req, requestID, audit.StatusSuccess, "")
+		httpx.WriteJSON(w, http.StatusOK, envelopeResult(requestID, result))
 		return
 	}
 
@@ -154,7 +185,7 @@ func (s *Server) awaitDecision(tenantID string, ticket *TicketRef) {
 	result, callErr := s.Router.Call(context.Background(), tenantID, pc.tool, pc.call.Arguments)
 	if callErr != nil {
 		pc.state = "BLOCKED"
-		pc.out = &protocol.ToolCallResult{
+		pc.out = &CallResult{
 			Content: []protocol.ToolContent{{Type: "text", Text: callErr.Error()}},
 			IsError: true,
 		}
@@ -162,7 +193,7 @@ func (s *Server) awaitDecision(tenantID string, ticket *TicketRef) {
 		return
 	}
 	pc.state = "DONE"
-	pc.out = &protocol.ToolCallResult{Content: result.Content, IsError: result.IsError}
+	pc.out = result
 	s.emitAuditEvent(pc, audit.StatusSuccess, decisionApprover(decision))
 }
 
@@ -176,13 +207,15 @@ func decisionApprover(d *TicketDecision) string {
 	return d.By
 }
 
-// emitAudit enqueues an audit event for a call (nil sink = no-op).
-func (s *Server) emitAudit(r *http.Request, p *agentauth.Principal, ref ToolRef, req protocol.ToolCallParams, status, approver string) {
+// emitAudit enqueues an audit event for a call (nil sink = no-op). The
+// requestID doubles as the audit idempotency key and the response envelope
+// field so the two can be correlated (design/32 6.3).
+func (s *Server) emitAudit(r *http.Request, p *agentauth.Principal, ref ToolRef, req protocol.ToolCallParams, requestID, status, approver string) {
 	if s.Audit == nil {
 		return
 	}
 	_ = s.Audit.Enqueue(r.Context(), &audit.AuditEvent{
-		EventID:  newEventID(),
+		EventID:  requestID,
 		TenantID: p.TenantID, AgentID: p.AgentID,
 		DeviceID: ref.DeviceUUID, ToolName: ref.ToolName,
 		Params: req.Arguments, Status: status, Approver: approver,
@@ -231,7 +264,7 @@ func (s *Server) handleCallStatus(w http.ResponseWriter, r *http.Request) {
 	case "BLOCKED":
 		httpx.WriteError(w, http.StatusForbidden, CodeBlockedByHITL, "BLOCKED_BY_HITL: operation not approved", httpx.TraceIDFrom(r))
 	case "DONE":
-		httpx.WriteJSON(w, http.StatusOK, out)
+		httpx.WriteJSON(w, http.StatusOK, envelopeResult(requestID, out))
 	default:
 		httpx.WriteJSON(w, http.StatusAccepted, map[string]string{
 			"request_id": requestID,
