@@ -45,6 +45,7 @@ export default {
     usernameRequired: 'Please enter your username',
     passwordRequired: 'Please enter your password',
     submit: 'Sign in',
+    demoTip: 'Demo accounts: admin / admin123! (platform admin); tenant-admin / tenant123! (tenant admin). Change these before any production deployment.',
     submitting: 'Signing in…',
     ssoSoon: 'Enterprise SSO coming soon',
     version: 'Version V1.0',

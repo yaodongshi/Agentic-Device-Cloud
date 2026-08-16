@@ -5,6 +5,13 @@
       <p>{{ t('login.subtitle') }}</p>
     </div>
     <el-card class="card">
+      <el-alert
+        type="info"
+        :closable="false"
+        class="demo-tip"
+      >
+        {{ t('login.demoTip') }}
+      </el-alert>
       <h2>{{ t('login.title') }}</h2>
       <el-alert
         v-if="errorMsg"
@@ -122,6 +129,7 @@ async function submit() {
 .brand h1 { margin: 0; color: var(--adc-brand); font-size: 26px; }
 .brand p { margin: var(--adc-space-1) 0 0; color: var(--adc-text-secondary); }
 .card { width: 380px; }
+.demo-tip { margin-bottom: 16px; }
 .alert { margin-bottom: var(--adc-space-4); }
 .submit { width: 100%; margin-top: var(--adc-space-1); }
 .sso { width: 100%; margin-left: 0; margin-top: var(--adc-space-2); }

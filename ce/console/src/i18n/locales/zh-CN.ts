@@ -45,6 +45,7 @@ export default {
     usernameRequired: '请输入用户名',
     passwordRequired: '请输入密码',
     submit: '登录',
+    demoTip: '演示环境默认账号：admin / admin123!（平台管理员）；tenant-admin / tenant123!（租户管理员）。生产部署前请务必修改。',
     submitting: '登录中…',
     ssoSoon: '企业 SSO 接入中',
     version: '版本 V1.0',

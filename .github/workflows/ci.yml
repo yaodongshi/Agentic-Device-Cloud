@@ -63,16 +63,14 @@ jobs:
           go tool cover -func=coverage.out
           TOTAL=$(go tool cover -func=coverage.out | awk '/^total:/{print $3}' | tr -d '%')
           echo "实际总覆盖率：${TOTAL}%"
-          # 覆盖率门槛（design/40：单测行覆盖不低于 70%）。
-          # 当前实际值 64.5%（2026-08-15 实测），未达 70%，门槛待达到后启用——
-          # 启用方式：取消下面 6 行注释（THRESHOLD=70 及其判断块）。
-          # THRESHOLD=70
-          # if awk "BEGIN{exit !(${TOTAL} >= ${THRESHOLD})}"; then
-          #   echo "覆盖率 ${TOTAL}% 不低于门槛 ${THRESHOLD}%，通过"
-          # else
-          #   echo "::error::覆盖率 ${TOTAL}% 低于门槛 ${THRESHOLD}%，阻断合并"
-          #   exit 1
-          # fi
+          # 覆盖率门槛（design/40：单测行覆盖不低于 70%；2026-08-15 实测 75.3% 已达标）
+          THRESHOLD=70
+          if awk "BEGIN{exit !(${TOTAL} >= ${THRESHOLD})}"; then
+            echo "覆盖率 ${TOTAL}% 不低于门槛 ${THRESHOLD}%，通过"
+          else
+            echo "::error::覆盖率 ${TOTAL}% 低于门槛 ${THRESHOLD}%，阻断合并"
+            exit 1
+          fi
 
       - name: 上传覆盖率产物
         uses: actions/upload-artifact@v4

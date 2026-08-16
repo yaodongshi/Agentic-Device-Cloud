@@ -875,6 +875,41 @@ func seedDemo(ctx context.Context, in seedDemoInput) (*demoSeed, error) {
 		return nil, err
 	}
 
+	// --- tenant-level demo accounts (A1.1): tenant-admin and approver for
+	// the demo tenant, so the console can be exercised with tenant-scoped
+	// roles out of the box. Same idempotent pattern as the admin account.
+	demoUsers := []struct {
+		username, display, password, role string
+	}{
+		{"tenant-admin", "Tenant Admin", "tenant123!", "TENANT_ADMIN"},
+		{"approver", "Demo Approver", "approver123!", "APPROVER"},
+	}
+	for _, du := range demoUsers {
+		hash, err := adminauth.HashPassword(du.password)
+		if err != nil {
+			return nil, err
+		}
+		if _, err := dbx.Exec(ctx, `INSERT INTO adc_users (tenant_id, username, display_name, password_hash, auth_source, status)
+			SELECT id, $1, $2, $3, 'LOCAL', 'ACTIVE'
+			FROM adc_tenants WHERE code='tenant-demo'
+			ON CONFLICT DO NOTHING`, du.username, du.display, hash); err != nil {
+			return nil, err
+		}
+		if _, err := dbx.Exec(ctx, `UPDATE adc_users
+			SET password_hash=$1, status='ACTIVE', updated_at=now()
+			WHERE username=$2 AND deleted_at IS NULL`, hash, du.username); err != nil {
+			return nil, err
+		}
+		if _, err := dbx.Exec(ctx, `INSERT INTO adc_user_roles (user_id, role_id, tenant_id)
+			SELECT u.id, r.id, u.tenant_id FROM adc_users u
+			JOIN adc_roles r ON r.role_code=$1 AND r.tenant_id = u.tenant_id
+			WHERE u.username=$2
+			ON CONFLICT DO NOTHING`, du.role, du.username); err != nil {
+			return nil, err
+		}
+		slog.Info("seeded demo tenant account", "username", du.username, "password", du.password, "role", du.role)
+	}
+
 	// --- demo Agent API key (name demo-agent). Issued through the
 	// production adminapi repo so the stored hashes match agentauth's
 	// verification exactly; the plaintext is logged once below. The

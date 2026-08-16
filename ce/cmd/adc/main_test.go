@@ -165,6 +165,27 @@ func expectSeedCommon(m pgxmock.PgxPoolIface, keyExists bool, auditExists bool) 
 		WHERE u.username='admin'
 		ON CONFLICT DO NOTHING`)).
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
+	// Tenant-level demo accounts (A1.1): tenant-admin and approver.
+	for range 2 {
+		m.ExpectExec(regexp.QuoteMeta(`INSERT INTO adc_users (tenant_id, username, display_name, password_hash, auth_source, status)
+		SELECT id, $1, $2, $3, 'LOCAL', 'ACTIVE'
+		FROM adc_tenants WHERE code='tenant-demo'
+		ON CONFLICT DO NOTHING`)).
+			WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg()).
+			WillReturnResult(pgxmock.NewResult("INSERT", 1))
+		m.ExpectExec(regexp.QuoteMeta(`UPDATE adc_users
+		SET password_hash=$1, status='ACTIVE', updated_at=now()
+		WHERE username=$2 AND deleted_at IS NULL`)).
+			WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg()).
+			WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+		m.ExpectExec(regexp.QuoteMeta(`INSERT INTO adc_user_roles (user_id, role_id, tenant_id)
+		SELECT u.id, r.id, u.tenant_id FROM adc_users u
+		JOIN adc_roles r ON r.role_code=$1 AND r.tenant_id = u.tenant_id
+		WHERE u.username=$2
+		ON CONFLICT DO NOTHING`)).
+			WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg()).
+			WillReturnResult(pgxmock.NewResult("INSERT", 1))
+	}
 	m.ExpectQuery(regexp.QuoteMeta(`SELECT EXISTS(SELECT 1 FROM adc_agent_api_keys
 		WHERE tenant_id=$1::uuid AND name='demo-agent' AND revoked_at IS NULL)`)).
 		WithArgs(seedTenantUUID).
