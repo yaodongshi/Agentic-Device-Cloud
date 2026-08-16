@@ -19,7 +19,6 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 // ---------------------------------------------------------------------------
@@ -29,11 +28,11 @@ import (
 // ---------------------------------------------------------------------------
 
 type pgToolRepo struct {
-	pool *pgxpool.Pool
+	pool pgxPooler
 }
 
 // NewPGToolRepo builds a PG tool repo over an existing pgx pool.
-func NewPGToolRepo(pool *pgxpool.Pool) *pgToolRepo {
+func NewPGToolRepo(pool pgxPooler) *pgToolRepo {
 	return &pgToolRepo{pool: pool}
 }
 
@@ -146,11 +145,11 @@ func (r *pgToolRepo) UpdateTools(ctx context.Context, deviceID string, changes [
 // ---------------------------------------------------------------------------
 
 type pgPolicyRepo struct {
-	pool *pgxpool.Pool
+	pool pgxPooler
 }
 
 // NewPGPolicyRepo builds a PG policy repo over an existing pgx pool.
-func NewPGPolicyRepo(pool *pgxpool.Pool) *pgPolicyRepo {
+func NewPGPolicyRepo(pool pgxPooler) *pgPolicyRepo {
 	return &pgPolicyRepo{pool: pool}
 }
 
@@ -235,12 +234,12 @@ func (r *pgPolicyRepo) SetPolicy(ctx context.Context, tenantID string, p *Approv
 // ---------------------------------------------------------------------------
 
 type pgAuditQueryRepo struct {
-	pool *pgxpool.Pool
+	pool pgxPooler
 }
 
 // NewPGAuditQueryRepo builds a PG audit query repo over an existing pgx
 // pool.
-func NewPGAuditQueryRepo(pool *pgxpool.Pool) *pgAuditQueryRepo {
+func NewPGAuditQueryRepo(pool pgxPooler) *pgAuditQueryRepo {
 	return &pgAuditQueryRepo{pool: pool}
 }
 

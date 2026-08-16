@@ -224,9 +224,16 @@ func TestApprovalHITLClientFullFlowApprove(t *testing.T) {
 
 	select {
 	case err := <-errCh:
-		t.Fatalf("AwaitDecision: %v", err)
+		if err != nil {
+			t.Fatalf("AwaitDecision: %v", err)
+		}
+		// Both channels are ready on success; the errCh pick above must
+		// not mask the decision itself.
+		if d := <-decisionCh; d == nil || d.Status != DecisionApproved || d.By != "emp_zhangwei" || d.Reason != "已核实工艺单，放行" {
+			t.Errorf("decision = %+v, want APPROVED by emp_zhangwei", d)
+		}
 	case d := <-decisionCh:
-		if d.Status != DecisionApproved || d.By != "emp_zhangwei" || d.Reason != "已核实工艺单，放行" {
+		if d == nil || d.Status != DecisionApproved || d.By != "emp_zhangwei" || d.Reason != "已核实工艺单，放行" {
 			t.Errorf("decision = %+v, want APPROVED by emp_zhangwei", d)
 		}
 	case <-time.After(2 * time.Second):

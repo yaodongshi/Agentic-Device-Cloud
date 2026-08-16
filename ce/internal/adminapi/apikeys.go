@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
 
 	"adc.dev/ce/internal/adminauth"
 	"adc.dev/ce/internal/agentauth"
@@ -492,11 +491,11 @@ const keyCols = `id::text, tenant_id::text, name, agent_id, key_prefix, scopes,
 
 // pgApiKeyRepo is the PostgreSQL ApiKeyRepo (design/32 3.7, migration 0001).
 type pgApiKeyRepo struct {
-	pool *pgxpool.Pool
+	pool pgxPooler
 }
 
 // NewPGApiKeyRepo builds an api key repository over an existing pgx pool.
-func NewPGApiKeyRepo(pool *pgxpool.Pool) *pgApiKeyRepo {
+func NewPGApiKeyRepo(pool pgxPooler) *pgApiKeyRepo {
 	return &pgApiKeyRepo{pool: pool}
 }
 

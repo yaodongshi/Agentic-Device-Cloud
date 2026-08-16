@@ -6,9 +6,11 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"log/slog"
@@ -19,6 +21,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/redis/go-redis/v9"
 
 	"adc.dev/ce/internal/adminapi"
@@ -81,14 +85,33 @@ func main() {
 	verifier := auth.NewVerifier(credRepo, nonces)
 
 	if seed {
-		secret, serr := seedDemo(ctx, pool, kek)
+		demo, serr := seedDemo(ctx, seedDemoInput{
+			dbx:     pool,
+			kek:     kek,
+			keys:    adminapi.NewPGApiKeyRepo(pool.Pool),
+			tickets: approval.NewPGTicketRepo(pool.Pool),
+			sink:    audit.NewValkeySink(rdb),
+		})
 		if serr != nil {
 			fatal(serr)
 		}
-		log.Info("seeded demo tenant/device/tool", "device_code", "cnc-demo-01", "secret", secret)
+		log.Info("seeded demo tenant/devices/tools", "tenant", "tenant-demo",
+			"devices", "cnc-demo-01,agv-demo-01",
+			"tools", "set_spindle_speed,get_spindle_status,move_to,get_position")
+		log.Info("seeded demo device secrets", "cnc-demo-01", demo.DeviceSecret, "agv-demo-01", demo.AGVSecret)
+		if demo.APIKey != "" {
+			log.Info("seeded demo agent api key (plaintext shown once)", "name", "demo-agent",
+				"key", demo.APIKey, "key_id", demo.APIKeyID)
+		} else {
+			log.Info("demo agent api key already present, keeping the existing key", "name", "demo-agent")
+		}
+		log.Info("seeded demo approval ticket", "ticket_id", demo.TicketID,
+			"status", "PENDING", "tool", "set_spindle_speed")
+		log.Info("seeded demo audit events", "event_ids", demo.AuditEventIDs)
 		log.Info("seeded demo admin account", "username", "admin", "password", demoAdminPassword,
 			"note", "dev default, change it before any shared environment")
-		_ = os.WriteFile("/tmp/adc-demo-secret", []byte(secret), 0o600)
+		_ = os.WriteFile("/tmp/adc-demo-secret", []byte(demo.DeviceSecret), 0o600)
+		_ = os.WriteFile("/tmp/adc-demo-agv-secret", []byte(demo.AGVSecret), 0o600)
 	}
 	var tenantID string
 	if err := pool.QueryRow(ctx, `SELECT id::text FROM adc_tenants WHERE code='tenant-demo'`).Scan(&tenantID); err != nil {
@@ -213,6 +236,7 @@ func main() {
 	adminSrv.Tools = adminapi.NewPGToolRepo(pool.Pool)
 	adminSrv.Policies = adminapi.NewPGPolicyRepo(pool.Pool)
 	adminSrv.AuditQuery = adminapi.NewPGAuditQueryRepo(pool.Pool)
+	adminSrv.Tickets = adminapi.NewPGTicketsRepo(pool.Pool)
 	adminSrv.Audit = &adminAuditSink{inner: audit.NewValkeySink(rdb)}
 	adminHandler := adminSrv.Handler()
 
@@ -678,43 +702,128 @@ func toolRows(pool *db.Pool) agentapi.ToolRows {
 	}
 }
 
-// seedDemo inserts a demo tenant, device (hmac, KEK-encrypted secret) and a
-// high-risk tool for the smoke flow, plus the admin bootstrap: the system
-// roles (PLATFORM_ADMIN / TENANT_ADMIN / APPROVER / AUDITOR) and the default
-// admin account (username admin, password demoAdminPassword, dev only). The
-// plaintext device secret is returned once for the mock device.
-func seedDemo(ctx context.Context, pool *db.Pool, kek []byte) (string, error) {
-	if _, err := pool.Exec(ctx, `INSERT INTO adc_tenants (id, code, name, status)
+// demoDB is the minimal PostgreSQL surface seedDemo needs. *db.Pool
+// (pgxpool) satisfies it; unit tests inject pgxmock-backed fakes.
+type demoDB interface {
+	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
+}
+
+// demoSeed carries the one-time plaintexts and identifiers produced by
+// seedDemo for the startup summary log. The API key plaintext exists only
+// in this struct and the log line (NFR-004: only hashes are persisted).
+type demoSeed struct {
+	DeviceSecret  string
+	AGVSecret     string
+	APIKey        string // plaintext, empty when the key already existed
+	APIKeyID      string
+	TicketID      string
+	AuditEventIDs []string
+}
+
+// seedDemoInput bundles the repository seams seedDemo writes through. The
+// demo API key is issued through the production adminapi.ApiKeyRepo, the
+// demo approval ticket through the production approval.TicketRepo, and the
+// demo audit events flow through the production audit.AuditSink (Valkey
+// queue -> worker -> adc_audit_logs), so seeding exercises exactly the
+// paths production data takes. Every step is idempotent; repeated -seed
+// runs keep the demo dataset stable (fixed event ids and ticket args are
+// the dedup keys).
+type seedDemoInput struct {
+	dbx     demoDB
+	kek     []byte
+	keys    adminapi.ApiKeyRepo
+	tickets approval.TicketRepo
+	sink    audit.AuditSink // nil in unit tests: audit events are skipped
+}
+
+// seedDemo inserts the demo tenant, the two demo devices (cnc-demo-01 with
+// set_spindle_speed risk 2 and read-only get_spindle_status risk 0;
+// agv-demo-01 with move_to risk 2 and read-only get_position risk 0), the
+// admin bootstrap (system roles + default admin), one demo Agent API key
+// (name demo-agent), one PENDING approval ticket and three sample audit
+// events (success / blocked_by_hitl / failed).
+func seedDemo(ctx context.Context, in seedDemoInput) (*demoSeed, error) {
+	dbx, kek := in.dbx, in.kek
+	if _, err := dbx.Exec(ctx, `INSERT INTO adc_tenants (id, code, name, status)
 		SELECT gen_random_uuid(), 'tenant-demo', 'Demo', 'ACTIVE'
 		WHERE NOT EXISTS (SELECT 1 FROM adc_tenants WHERE code='tenant-demo')`); err != nil {
-		return "", err
+		return nil, err
 	}
+	var tenantID string
+	if err := dbx.QueryRow(ctx, `SELECT id::text FROM adc_tenants WHERE code='tenant-demo'`).Scan(&tenantID); err != nil {
+		return nil, fmt.Errorf("seed: load demo tenant: %w", err)
+	}
+	out := &demoSeed{}
+
+	// --- cnc-demo-01 (existing demo device) ---
 	secret, err := auth.GenerateSecret()
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	stored, err := auth.EncryptSecret(secret, kek)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	// Dev idempotency: update the existing demo device's credential with the
 	// freshly generated secret (the plaintext is only known to this run),
 	// then insert only when absent.
-	if _, err := pool.Exec(ctx, `UPDATE adc_devices SET credential_hash=$1, auth_type='hmac', device_class='B'
+	if _, err := dbx.Exec(ctx, `UPDATE adc_devices SET credential_hash=$1, auth_type='hmac', device_class='B'
 		WHERE device_code='cnc-demo-01'`, stored); err != nil {
-		return "", err
+		return nil, err
 	}
-	if _, err := pool.Exec(ctx, `INSERT INTO adc_devices (id, tenant_id, device_code, name, device_type, device_class, auth_type, credential_hash, status)
+	if _, err := dbx.Exec(ctx, `INSERT INTO adc_devices (id, tenant_id, device_code, name, device_type, device_class, auth_type, credential_hash, status)
 		SELECT gen_random_uuid(), id, 'cnc-demo-01', 'Demo CNC', 'cnc', 'B', 'hmac', $1, 'OFFLINE'
 		FROM adc_tenants WHERE code='tenant-demo'
 		AND NOT EXISTS (SELECT 1 FROM adc_devices WHERE device_code='cnc-demo-01')`, stored); err != nil {
-		return "", err
+		return nil, err
 	}
-	if _, err := pool.Exec(ctx, `INSERT INTO adc_device_tools (id, tenant_id, device_id, tool_name, description, input_schema, risk_level, is_enabled)
+	out.DeviceSecret = secret
+	if _, err := dbx.Exec(ctx, `INSERT INTO adc_device_tools (id, tenant_id, device_id, tool_name, description, input_schema, risk_level, is_enabled)
 		SELECT gen_random_uuid(), d.tenant_id, d.id, 'set_spindle_speed', 'Set CNC spindle RPM (high risk)', '{"type":"object","properties":{"rpm":{"type":"number"}}}', 2, true
 		FROM adc_devices d WHERE d.device_code='cnc-demo-01'
 		AND NOT EXISTS (SELECT 1 FROM adc_device_tools t WHERE t.device_id=d.id AND t.tool_name='set_spindle_speed')`); err != nil {
-		return "", err
+		return nil, err
+	}
+	if _, err := dbx.Exec(ctx, `INSERT INTO adc_device_tools (id, tenant_id, device_id, tool_name, description, input_schema, risk_level, is_enabled)
+		SELECT gen_random_uuid(), d.tenant_id, d.id, 'get_spindle_status', 'Read CNC spindle RPM (read-only)', '{"type":"object"}', 0, true
+		FROM adc_devices d WHERE d.device_code='cnc-demo-01'
+		AND NOT EXISTS (SELECT 1 FROM adc_device_tools t WHERE t.device_id=d.id AND t.tool_name='get_spindle_status')`); err != nil {
+		return nil, err
+	}
+
+	// --- agv-demo-01 (new demo device: AGV with one HITL move tool) ---
+	agvSecret, err := auth.GenerateSecret()
+	if err != nil {
+		return nil, err
+	}
+	agvStored, err := auth.EncryptSecret(agvSecret, kek)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := dbx.Exec(ctx, `UPDATE adc_devices SET credential_hash=$1, auth_type='hmac', device_class='B'
+		WHERE device_code='agv-demo-01'`, agvStored); err != nil {
+		return nil, err
+	}
+	if _, err := dbx.Exec(ctx, `INSERT INTO adc_devices (id, tenant_id, device_code, name, device_type, device_class, auth_type, credential_hash, status)
+		SELECT gen_random_uuid(), id, 'agv-demo-01', 'Demo AGV', 'agv', 'B', 'hmac', $1, 'OFFLINE'
+		FROM adc_tenants WHERE code='tenant-demo'
+		AND NOT EXISTS (SELECT 1 FROM adc_devices WHERE device_code='agv-demo-01')`, agvStored); err != nil {
+		return nil, err
+	}
+	out.AGVSecret = agvSecret
+	if _, err := dbx.Exec(ctx, `INSERT INTO adc_device_tools (id, tenant_id, device_id, tool_name, description, input_schema, risk_level, is_enabled)
+		SELECT gen_random_uuid(), d.tenant_id, d.id, 'move_to', 'Move AGV to a warehouse location (high risk)', '{"type":"object","properties":{"location":{"type":"string"}},"required":["location"]}', 2, true
+		FROM adc_devices d WHERE d.device_code='agv-demo-01'
+		AND NOT EXISTS (SELECT 1 FROM adc_device_tools t WHERE t.device_id=d.id AND t.tool_name='move_to')`); err != nil {
+		return nil, err
+	}
+	if _, err := dbx.Exec(ctx, `INSERT INTO adc_device_tools (id, tenant_id, device_id, tool_name, description, input_schema, risk_level, is_enabled)
+		SELECT gen_random_uuid(), d.tenant_id, d.id, 'get_position', 'Read AGV position (read-only)', '{"type":"object"}', 0, true
+		FROM adc_devices d WHERE d.device_code='agv-demo-01'
+		AND NOT EXISTS (SELECT 1 FROM adc_device_tools t WHERE t.device_id=d.id AND t.tool_name='get_position')`); err != nil {
+		return nil, err
 	}
 
 	// --- admin bootstrap (design/80 B-01): system roles + default admin ---
@@ -736,34 +845,175 @@ func seedDemo(ctx context.Context, pool *db.Pool, kek []byte) (string, error) {
 		 FROM adc_tenants WHERE code='tenant-demo' ON CONFLICT DO NOTHING`,
 	}
 	for _, q := range roleSteps {
-		if _, err := pool.Exec(ctx, q); err != nil {
-			return "", err
+		if _, err := dbx.Exec(ctx, q); err != nil {
+			return nil, err
 		}
 	}
 	passHash, err := adminauth.HashPassword(demoAdminPassword)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	// Insert the admin user when absent, then force the documented dev
 	// password on every seed run so the console login always works out
 	// of the box.
-	if _, err := pool.Exec(ctx, `INSERT INTO adc_users (tenant_id, username, display_name, password_hash, auth_source, status)
+	if _, err := dbx.Exec(ctx, `INSERT INTO adc_users (tenant_id, username, display_name, password_hash, auth_source, status)
 		SELECT id, 'admin', 'Platform Admin', $1, 'LOCAL', 'ACTIVE'
 		FROM adc_tenants WHERE code='tenant-demo'
 		ON CONFLICT DO NOTHING`, passHash); err != nil {
-		return "", err
+		return nil, err
 	}
-	if _, err := pool.Exec(ctx, `UPDATE adc_users
+	if _, err := dbx.Exec(ctx, `UPDATE adc_users
 		SET password_hash=$1, status='ACTIVE', updated_at=now()
 		WHERE username='admin' AND deleted_at IS NULL`, passHash); err != nil {
-		return "", err
+		return nil, err
 	}
-	if _, err := pool.Exec(ctx, `INSERT INTO adc_user_roles (user_id, role_id, tenant_id)
+	if _, err := dbx.Exec(ctx, `INSERT INTO adc_user_roles (user_id, role_id, tenant_id)
 		SELECT u.id, r.id, u.tenant_id FROM adc_users u
 		JOIN adc_roles r ON r.role_code='PLATFORM_ADMIN' AND r.scope='PLATFORM'
 		WHERE u.username='admin'
 		ON CONFLICT DO NOTHING`); err != nil {
-		return "", err
+		return nil, err
 	}
-	return secret, nil
+
+	// --- demo Agent API key (name demo-agent). Issued through the
+	// production adminapi repo so the stored hashes match agentauth's
+	// verification exactly; the plaintext is logged once below. The
+	// existence check keeps repeated seeds idempotent (the plaintext of a
+	// previously issued key is unknowable by design). created_by carries
+	// the demo admin's user id (adc_agent_api_keys.created_by is a uuid).
+	var keyExists bool
+	if err := dbx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM adc_agent_api_keys
+		WHERE tenant_id=$1::uuid AND name='demo-agent' AND revoked_at IS NULL)`, tenantID).Scan(&keyExists); err != nil {
+		return nil, fmt.Errorf("seed: probe demo agent key: %w", err)
+	}
+	if !keyExists {
+		var adminID string
+		if err := dbx.QueryRow(ctx, `SELECT id::text FROM adc_users
+			WHERE username='admin' AND deleted_at IS NULL`).Scan(&adminID); err != nil {
+			return nil, fmt.Errorf("seed: load demo admin user: %w", err)
+		}
+		keyID, prefix, keySecret, keyHash, secretHash, err := generateDemoKeyMaterial()
+		if err != nil {
+			return nil, err
+		}
+		created, err := in.keys.Issue(ctx, &adminapi.NewKey{
+			TenantID:   tenantID,
+			Name:       "demo-agent",
+			AgentID:    "demo-agent",
+			KeyPrefix:  prefix,
+			KeyHash:    keyHash,
+			SecretHash: secretHash,
+			Scopes:     []string{"*"},
+			CreatedBy:  adminID,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("seed: issue demo agent key: %w", err)
+		}
+		out.APIKey = "adc_" + keyID + "_" + keySecret
+		out.APIKeyID = created.ID
+	}
+
+	// --- demo approval ticket (PENDING), created through the production
+	// approval repo. The fixed tool+arguments pair is the dedup key
+	// (uq_tickets_pending_dedup): a repeat seed reuses the existing
+	// in-flight ticket instead of flooding the queue.
+	var cncUUID, agvUUID string
+	if err := dbx.QueryRow(ctx, `SELECT id::text FROM adc_devices WHERE device_code='cnc-demo-01'`).Scan(&cncUUID); err != nil {
+		return nil, fmt.Errorf("seed: load demo cnc device: %w", err)
+	}
+	if err := dbx.QueryRow(ctx, `SELECT id::text FROM adc_devices WHERE device_code='agv-demo-01'`).Scan(&agvUUID); err != nil {
+		return nil, fmt.Errorf("seed: load demo agv device: %w", err)
+	}
+	demoTicket, err := approval.NewPending(tenantID, "demo-agent", cncUUID, "set_spindle_speed",
+		json.RawMessage(`{"rpm": 8000}`), approval.RiskHigh, time.Time{})
+	if err != nil {
+		return nil, fmt.Errorf("seed: build demo ticket: %w", err)
+	}
+	createdTicket, err := in.tickets.Create(ctx, demoTicket)
+	if errors.Is(err, approval.ErrTicketDedup) && createdTicket != nil {
+		out.TicketID = createdTicket.TicketID
+	} else if err != nil {
+		return nil, fmt.Errorf("seed: create demo ticket: %w", err)
+	} else {
+		out.TicketID = createdTicket.TicketID
+	}
+
+	// --- demo audit events, flowing through the production pipeline
+	// (Valkey queue -> worker -> adc_audit_logs). Fixed UUID-shaped event
+	// ids (adc_audit_logs.request_id is a uuid column) plus an existence
+	// probe per event keep repeated seeds idempotent; enqueue failures are
+	// warnings by contract (design/31 1.3.7 best-effort) and never abort
+	// startup.
+	demoEvents := []*audit.AuditEvent{
+		{
+			EventID:   "d3e00000-0000-4000-8000-000000000001",
+			TenantID:  tenantID,
+			AgentID:   "demo-agent",
+			DeviceID:  agvUUID,
+			ToolName:  "get_position",
+			Params:    map[string]any{"x": float64(1), "y": float64(2)},
+			Result:    map[string]any{"x": float64(1), "y": float64(2)},
+			Status:    audit.StatusSuccess,
+			RiskLevel: approval.RiskRead,
+		},
+		{
+			EventID:   "d3e00000-0000-4000-8000-000000000002",
+			TenantID:  tenantID,
+			AgentID:   "demo-agent",
+			DeviceID:  cncUUID,
+			ToolName:  "set_spindle_speed",
+			Params:    map[string]any{"rpm": float64(9000)},
+			Status:    audit.StatusBlockedByHITL,
+			RiskLevel: approval.RiskHigh,
+		},
+		{
+			EventID:   "d3e00000-0000-4000-8000-000000000003",
+			TenantID:  tenantID,
+			AgentID:   "demo-agent",
+			DeviceID:  cncUUID,
+			ToolName:  "set_spindle_speed",
+			Params:    map[string]any{"rpm": float64(12000)},
+			Result:    map[string]any{"error": "spindle overload"},
+			Status:    audit.StatusFailed,
+			RiskLevel: approval.RiskHigh,
+		},
+	}
+	for _, ev := range demoEvents {
+		var exists bool
+		if err := dbx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM adc_audit_logs WHERE request_id=$1::uuid)`, ev.EventID).Scan(&exists); err != nil {
+			slog.Warn("seed: demo audit probe failed, skipping event", "event_id", ev.EventID, "err", err)
+			continue
+		}
+		if exists {
+			continue
+		}
+		if in.sink == nil {
+			continue
+		}
+		if err := in.sink.Enqueue(ctx, ev); err != nil {
+			slog.Warn("seed: demo audit enqueue failed", "event_id", ev.EventID, "err", err)
+			continue
+		}
+		out.AuditEventIDs = append(out.AuditEventIDs, ev.EventID)
+	}
+	return out, nil
+}
+
+// generateDemoKeyMaterial creates one Agent API key token in the same
+// layout as adminapi key issuance: "adc_<keyID>_<secret>" with
+// SHA-256 hashes for storage (NFR-004). Only the hashes are persisted by
+// the ApiKeyRepo; the plaintext returns here for the one-time log.
+func generateDemoKeyMaterial() (keyID, prefix, secret, keyHash, secretHash string, err error) {
+	var b [4]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return "", "", "", "", "", fmt.Errorf("seed: generate demo key id: %w", err)
+	}
+	keyID = hex.EncodeToString(b[:])
+	prefix = "adc_" + keyID
+	sb := make([]byte, 32)
+	if _, err := rand.Read(sb); err != nil {
+		return "", "", "", "", "", fmt.Errorf("seed: generate demo key secret: %w", err)
+	}
+	secret = hex.EncodeToString(sb)
+	return keyID, prefix, secret, agentauth.HashKeyID(keyID), agentauth.HashSecret(secret), nil
 }

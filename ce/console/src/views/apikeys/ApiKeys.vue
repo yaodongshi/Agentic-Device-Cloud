@@ -119,7 +119,16 @@
         </template>
       </el-table-column>
       <template #empty>
-        <el-empty :description="t('apiKeys.empty')" />
+        <el-empty :description="t('apiKeys.empty')">
+          <div class="empty-actions">
+            <el-button
+              type="primary"
+              @click="openCreate"
+            >
+              {{ t('apiKeys.create') }}
+            </el-button>
+          </div>
+        </el-empty>
       </template>
     </el-table>
 
@@ -404,4 +413,5 @@ onMounted(fetchList)
 .credential-box { display: flex; gap: var(--adc-space-2); margin: var(--adc-space-4) 0 var(--adc-space-3); }
 .credential-box .el-input { flex: 1; }
 .muted { color: var(--adc-text-secondary); }
+.empty-actions { display: flex; justify-content: center; }
 </style>

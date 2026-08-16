@@ -107,7 +107,7 @@ async function submit() {
       tenantId: res.tenant_id,
       role: res.role,
     })
-    router.push('/devices')
+    router.push('/dashboard')
   } catch (err) {
     errorMsg.value = errorMessage(err, t)
   } finally {

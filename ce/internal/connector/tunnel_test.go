@@ -379,9 +379,18 @@ func TestServeHTTPHappyPath(t *testing.T) {
 	}
 
 	// Disconnect cleanup: the new session's onClose removes the route and
-	// unregisters from the registry exactly once.
+	// unregisters from the registry exactly once. The registry cleanup runs
+	// after the hub removal (tunnel.go cleanup chain), so wait for it
+	// instead of asserting immediately.
 	_ = dev2.Close()
 	waitFor(t, func() bool { return h.hub.Size() == 0 }, 3*time.Second)
+	waitFor(t, func() bool {
+		h.reg.mu.Lock()
+		defer h.reg.mu.Unlock()
+		return h.reg.unregisters >= 1
+	}, 3*time.Second)
+	// Let a potential double-unregister surface before the exact check.
+	time.Sleep(100 * time.Millisecond)
 	h.reg.mu.Lock()
 	unregs := h.reg.unregisters
 	h.reg.mu.Unlock()

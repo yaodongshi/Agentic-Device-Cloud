@@ -36,6 +36,15 @@
           </span>
           <template #dropdown>
             <el-dropdown-menu>
+              <el-dropdown-item disabled>
+                {{ t('layout.settings') }}
+              </el-dropdown-item>
+              <el-dropdown-item
+                divided
+                @click="openDocs"
+              >
+                {{ t('layout.docs') }}
+              </el-dropdown-item>
               <el-dropdown-item @click="confirmLogout">
                 {{ t('layout.logout') }}
               </el-dropdown-item>
@@ -55,6 +64,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { ElMessageBox } from 'element-plus'
 import { api } from '@/api/request'
 import { useAuthStore } from '@/stores/auth'
+import { DOCS_URL } from '@/utils/links'
 import type { Role } from '@/api/types'
 
 const { t } = useI18n()
@@ -72,6 +82,7 @@ interface MenuItem {
 }
 
 const menus: MenuItem[] = [
+  { path: '/dashboard', key: 'dashboard' },
   { path: '/devices', key: 'devices' },
   { path: '/tools', key: 'tools', roles: ['platform_admin', 'tenant_admin'] },
   { path: '/approvals', key: 'approvals', roles: ['platform_admin', 'tenant_admin', 'approver'] },
@@ -91,6 +102,12 @@ const activeMenu = computed(() =>
 )
 
 const currentKey = computed(() => route.meta.title as string)
+
+// The docs site ships with FR-020; until then the repo README is the docs
+// entry point (links.ts).
+function openDocs() {
+  window.open(DOCS_URL, '_blank', 'noopener')
+}
 
 async function confirmLogout() {
   const ok = await ElMessageBox.confirm(t('layout.logoutConfirm'), t('layout.logout'), {

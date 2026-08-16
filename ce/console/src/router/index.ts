@@ -2,9 +2,11 @@ import { createRouter, createWebHistory } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import type { Role } from '@/api/types'
 
-// Route table mirrors design/20 information architecture: login plus the
-// seven console modules under the main layout. meta.roles hides modules at
-// the route layer (design/20 2.2 double-layer visibility with the menu).
+// Route table mirrors design/20 information architecture: login, the
+// dashboard landing page and the seven console modules under the main
+// layout. meta.roles hides modules at the route layer (design/20 2.2
+// double-layer visibility with the menu).
+const dashboard = { path: 'dashboard', name: 'dashboard', component: () => import('@/views/Dashboard.vue'), meta: { title: 'dashboard' } }
 const devices = { path: 'devices', name: 'devices', component: () => import('@/views/devices/Devices.vue'), meta: { title: 'devices' } }
 
 const moduleRoles: Record<string, Role[]> = {
@@ -30,8 +32,8 @@ function moduleRoute(name: string, load: () => Promise<unknown>) {
 
 // Landing path per role for the RBAC guard fallback.
 const roleHome: Record<Role, string> = {
-  platform_admin: '/devices',
-  tenant_admin: '/devices',
+  platform_admin: '/dashboard',
+  tenant_admin: '/dashboard',
   approver: '/approvals',
   auditor: '/audit',
 }
@@ -52,8 +54,9 @@ export const router = createRouter({
     {
       path: '/',
       component: () => import('@/layouts/MainLayout.vue'),
-      redirect: '/devices',
+      redirect: '/dashboard',
       children: [
+        dashboard,
         devices,
         moduleRoute('tools', () => import('@/views/tools/Tools.vue')),
         moduleRoute('approvals', () => import('@/views/approvals/Approvals.vue')),
@@ -81,7 +84,7 @@ const publicNames = ['login', 'hitlAction']
 router.beforeEach((to) => {
   const auth = useAuthStore()
   if (!publicNames.includes(String(to.name)) && !auth.token) return { name: 'login' }
-  if (to.name === 'login' && auth.token) return { name: 'devices' }
+  if (to.name === 'login' && auth.token) return { name: 'dashboard' }
   const roles = to.meta.roles as Role[] | undefined
   if (roles && auth.user && !roles.includes(auth.user.role)) {
     return { path: roleHome[auth.user.role] }

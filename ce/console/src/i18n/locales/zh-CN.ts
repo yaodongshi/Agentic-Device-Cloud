@@ -27,6 +27,7 @@ export default {
     total: '共 {total} 条',
   },
   menu: {
+    dashboard: '概览',
     devices: '设备管理',
     tools: '工具与风险等级',
     approvals: '审批工单',
@@ -51,11 +52,42 @@ export default {
   layout: {
     logout: '退出登录',
     logoutConfirm: '确定退出登录吗？',
+    settings: '个人设置（占位）',
+    docs: '文档',
     roles: {
       platform_admin: '平台管理员',
       tenant_admin: '租户管理员',
       approver: '审批人',
       auditor: '审计员',
+    },
+  },
+  dashboard: {
+    refresh: '刷新',
+    onlineDevices: '在线设备数',
+    agentCallsToday: '今日 Agent 调用量',
+    pendingTickets: '待审批工单',
+    hitlBlocked: 'HITL 拦截总数',
+    cumulativeHint: '网关暂未提供日窗口计数，当前显示累计值',
+    pendingHint: '点击进入工单中心处理',
+    quickActions: '快捷操作',
+    registerDevice: '注册设备',
+    createApiKey: '创建 API Key',
+    viewAudit: '查看审计',
+    recentAudit: '最近审计',
+    recentAuditHint: '最近 24 小时最新事件',
+    viewAll: '查看全部',
+    auditEmpty: '暂无审计事件——Agent 发起调用后将自动记录在这里',
+    onboarding: {
+      title: '欢迎使用 ADC 控制台',
+      intro: '三步完成首次接入，让设备与 Agent 跑起来',
+      step1: '注册设备',
+      step1Desc: '在设备管理页创建设备，下载仅显示一次的凭证',
+      step2: '创建 API Key',
+      step2Desc: '为你的 Agent 签发调用凭证与工具权限',
+      step3: '接入设备 SDK',
+      step3Desc: '按接入指南完成设备端 SDK 配置并上线',
+      guide: '查看接入指南',
+      gotIt: '我知道了',
     },
   },
   devices: {
@@ -103,7 +135,8 @@ export default {
     credentialTitle: '设备凭证（仅显示一次）',
     credentialWarning: '凭证仅此一次完整显示，请立即复制保存；平台仅存哈希，丢失后需重新签发。',
     ackSaved: '我已复制并妥善保存凭证',
-    empty: '暂无设备，点击右上角"注册设备"接入第一台设备',
+    guide: '接入指南',
+    empty: '还没有设备——点击右上角"注册设备"注册第一台设备，或参考接入指南',
     searchEmpty: '未找到符合条件的设备',
   },
   apiKeys: {
@@ -138,7 +171,7 @@ export default {
     keyTitle: 'API Key（仅显示一次）',
     keyWarning: '完整 Key 仅此一次显示，请立即复制保存；请勿通过 IM 或邮件明文传输。',
     ackSaved: '我已复制并妥善保存 Key',
-    empty: '暂无 API Key，点击右上角"创建 Key"签发第一个',
+    empty: '暂无 API Key——点击右上角"创建 Key"为你的 Agent 签发第一个凭证',
     searchEmpty: '未找到符合条件的 Key',
   },
   tools: {
@@ -174,8 +207,8 @@ export default {
     downgradeReasonPlaceholder: '必填，10-200 字，将写入审计日志',
     reasonLength: '操作理由须为 10-200 字',
     saveSuccess: '配置已保存，30 秒内对数据面生效',
-    empty: '请先选择设备查看工具目录',
-    searchEmpty: '该设备暂未同步到工具',
+    empty: '还没有设备可查看——先注册设备并完成 SDK 接入，工具目录会自动同步',
+    searchEmpty: '该设备暂未同步到工具——检查设备 SDK 配置，或等待下一次心跳同步',
   },
   approvals: {
     tabs: {
@@ -219,7 +252,7 @@ export default {
     rejectReasonRequired: '拒绝须填写审批意见',
     decisionSuccess: '审批已提交，工单状态已更新',
     processedHint: '该工单已处理，操作区不可用',
-    empty: '暂无符合条件的审批工单',
+    empty: '暂无审批工单，高危操作将自动出现在这里',
   },
   audit: {
     timeFrom: '开始时间',
@@ -250,7 +283,7 @@ export default {
     prevPage: '上一页',
     nextPage: '下一页',
     pageOf: '第 {n} 页',
-    empty: '未找到符合条件的审计日志，请调整时间范围或筛选条件',
+    empty: '暂无审计日志——请调整时间范围或筛选条件，Agent 调用产生后会自动记录在这里',
   },
   hitl: {
     action: {
@@ -321,7 +354,7 @@ export default {
     enableSuccess: '租户已启用',
     createSuccess: '租户创建成功',
     quotaSaveSuccess: '配额已更新',
-    empty: '暂无租户，点击右上角"新建租户"创建第一个',
+    empty: '暂无租户——点击右上角"新建租户"创建第一个租户',
     searchEmpty: '未找到符合条件的租户',
   },
   orgUsers: {
@@ -375,7 +408,7 @@ export default {
     approvalP95Hint: 'P95（毫秒）',
     approvalThreshold: 'P95 阈值 500ms',
     totalLabel: '总量',
-    noData: '暂无指标数据',
+    noData: '暂无指标数据——请检查网关 /metrics 端点是否可达',
     loadFailed: '指标数据加载失败',
     staleHint: '数据中断：显示最后采集数据，请检查网关 /metrics 端点',
     tenantOther: '其他租户',

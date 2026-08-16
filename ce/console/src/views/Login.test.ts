@@ -100,7 +100,7 @@ describe('Login', () => {
     expect(postMock).not.toHaveBeenCalled()
   })
 
-  it('submits credentials, persists the session and redirects to /devices', async () => {
+  it('submits credentials, persists the session and redirects to /dashboard', async () => {
     postMock.mockResolvedValue(loginResponse)
     const wrapper = mountLogin()
     await wrapper.find('input[autocomplete="username"]').setValue('admin')
@@ -116,7 +116,7 @@ describe('Login', () => {
       userId: 'u-1',
       tenantId: 't-1',
     })
-    expect(pushMock).toHaveBeenCalledWith('/devices')
+    expect(pushMock).toHaveBeenCalledWith('/dashboard')
   })
 
   it('renders the mapped server error when login fails', async () => {
@@ -143,6 +143,6 @@ describe('Login', () => {
     await wrapper.get('.submit').trigger('click')
     await flushPromises()
     await expectNoText(wrapper, '用户名或密码错误')
-    expect(pushMock).toHaveBeenCalledWith('/devices')
+    expect(pushMock).toHaveBeenCalledWith('/dashboard')
   })
 })

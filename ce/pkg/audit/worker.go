@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"reflect"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -296,9 +297,15 @@ INSERT INTO adc_audit_logs
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
 ON CONFLICT (request_id, created_at) DO NOTHING`
 
+// batchSender is the minimal pgx pool surface pgInserter uses.
+// *pgxpool.Pool satisfies it in production; unit tests inject pgxmock.
+type batchSender interface {
+	SendBatch(ctx context.Context, b *pgx.Batch) pgx.BatchResults
+}
+
 // pgInserter batch-inserts events into adc_audit_logs through a pgx pool.
 type pgInserter struct {
-	pool *pgxpool.Pool
+	pool batchSender
 }
 
 func (p *pgInserter) InsertBatch(ctx context.Context, evs []*AuditEvent) error {
@@ -347,10 +354,18 @@ func (p *pgInserter) InsertBatch(ctx context.Context, evs []*AuditEvent) error {
 }
 
 // marshalJSONB returns the JSON bytes of v, or nil (SQL NULL) when v is
-// nil.
+// nil (including typed nils such as a nil map or slice, which would
+// otherwise serialize as the JSON literal null).
 func marshalJSONB(v any) (any, error) {
 	if v == nil {
 		return nil, nil
+	}
+	rv := reflect.ValueOf(v)
+	switch rv.Kind() {
+	case reflect.Map, reflect.Slice, reflect.Ptr, reflect.Interface:
+		if rv.IsNil() {
+			return nil, nil
+		}
 	}
 	b, err := json.Marshal(v)
 	if err != nil {

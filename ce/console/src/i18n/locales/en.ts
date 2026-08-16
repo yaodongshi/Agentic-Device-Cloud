@@ -27,6 +27,7 @@ export default {
     total: '{total} items',
   },
   menu: {
+    dashboard: 'Overview',
     devices: 'Devices',
     tools: 'Tools & Risk',
     approvals: 'Approvals',
@@ -51,11 +52,42 @@ export default {
   layout: {
     logout: 'Sign out',
     logoutConfirm: 'Are you sure you want to sign out?',
+    settings: 'Profile Settings (placeholder)',
+    docs: 'Docs',
     roles: {
       platform_admin: 'Platform Admin',
       tenant_admin: 'Tenant Admin',
       approver: 'Approver',
       auditor: 'Auditor',
+    },
+  },
+  dashboard: {
+    refresh: 'Refresh',
+    onlineDevices: 'Devices Online',
+    agentCallsToday: "Today's Agent Calls",
+    pendingTickets: 'Pending Approvals',
+    hitlBlocked: 'HITL Blocked',
+    cumulativeHint: 'The gateway has no day-window counter yet; showing the cumulative total',
+    pendingHint: 'Open the approval center to handle',
+    quickActions: 'Quick Actions',
+    registerDevice: 'Register Device',
+    createApiKey: 'Create API Key',
+    viewAudit: 'View Audit Logs',
+    recentAudit: 'Recent Audit',
+    recentAuditHint: 'Latest events in the last 24 hours',
+    viewAll: 'View All',
+    auditEmpty: 'No audit events yet — agent calls will be recorded here automatically',
+    onboarding: {
+      title: 'Welcome to the ADC Console',
+      intro: 'Three steps to onboard your first device and get agents running',
+      step1: 'Register a Device',
+      step1Desc: 'Create the device and download its one-time credential',
+      step2: 'Create an API Key',
+      step2Desc: 'Issue a call credential with tool scopes for your agent',
+      step3: 'Connect the Device SDK',
+      step3Desc: 'Follow the integration guide to configure the SDK and bring the device online',
+      guide: 'Integration Guide',
+      gotIt: 'Got it',
     },
   },
   devices: {
@@ -103,7 +135,8 @@ export default {
     credentialTitle: 'Device Credential (shown once)',
     credentialWarning: 'The credential is shown in full only this once. Copy and store it now; the platform keeps only a hash, and a lost credential requires re-issuing.',
     ackSaved: 'I have copied and stored the credential',
-    empty: 'No devices yet. Click "Register Device" to onboard the first one',
+    guide: 'Integration Guide',
+    empty: 'No devices yet — click "Register Device" to onboard the first one, or read the integration guide',
     searchEmpty: 'No devices match the current filters',
   },
   apiKeys: {
@@ -138,7 +171,7 @@ export default {
     keyTitle: 'API Key (shown once)',
     keyWarning: 'The full key is shown only this once. Copy and store it now; never send it over IM or email.',
     ackSaved: 'I have copied and stored the key',
-    empty: 'No API keys yet. Click "Create Key" to issue the first one',
+    empty: 'No API keys yet — click "Create Key" to issue the first credential for your agent',
     searchEmpty: 'No keys match the current filters',
   },
   tools: {
@@ -174,8 +207,8 @@ export default {
     downgradeReasonPlaceholder: 'Required, 10-200 chars; will be written to the audit log',
     reasonLength: 'The reason must be 10-200 characters',
     saveSuccess: 'Saved; takes effect on the data plane within 30s',
-    empty: 'Select a device first to view its tool catalog',
-    searchEmpty: 'No tools synced for this device yet',
+    empty: 'No devices to inspect yet — register a device and complete the SDK setup; the tool catalog syncs automatically',
+    searchEmpty: 'No tools synced for this device — check the device SDK configuration or wait for the next heartbeat',
   },
   approvals: {
     tabs: {
@@ -219,7 +252,7 @@ export default {
     rejectReasonRequired: 'A comment is required to reject',
     decisionSuccess: 'Decision submitted, ticket status updated',
     processedHint: 'This ticket has been processed; actions are disabled',
-    empty: 'No approval tickets match the current filters',
+    empty: 'No approval tickets — high-risk operations will appear here automatically',
   },
   audit: {
     timeFrom: 'From',
@@ -250,7 +283,7 @@ export default {
     prevPage: 'Previous',
     nextPage: 'Next',
     pageOf: 'Page {n}',
-    empty: 'No audit logs match the filters; adjust the time range or criteria',
+    empty: 'No audit logs — adjust the time range or filters; agent calls are recorded here automatically',
   },
   hitl: {
     action: {
@@ -321,7 +354,7 @@ export default {
     enableSuccess: 'Tenant enabled',
     createSuccess: 'Tenant created',
     quotaSaveSuccess: 'Quota updated',
-    empty: 'No tenants yet. Click "New Tenant" to create the first one',
+    empty: 'No tenants yet — click "New Tenant" to create the first one',
     searchEmpty: 'No tenants match the current filters',
   },
   orgUsers: {
@@ -375,7 +408,7 @@ export default {
     approvalP95Hint: 'P95 (ms)',
     approvalThreshold: 'P95 threshold 500ms',
     totalLabel: 'Total',
-    noData: 'No metric data yet',
+    noData: 'No metric data — check whether the gateway /metrics endpoint is reachable',
     loadFailed: 'Failed to load metrics',
     staleHint: 'Data interrupted: showing the last fetched data; check the gateway /metrics endpoint',
     tenantOther: 'Other tenants',

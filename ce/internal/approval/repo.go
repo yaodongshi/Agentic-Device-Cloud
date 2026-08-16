@@ -15,7 +15,6 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 // Repository outcome errors for the CAS decision path.
@@ -131,14 +130,21 @@ const ticketCols = `id::text, tenant_id::text, COALESCE(agent_id,''), device_id:
 	arguments, params_hash, risk_level, status, COALESCE(approver_name,''), COALESCE(comment,''),
 	decided_at, expires_at, callback_signature, version, created_at`
 
+// poolQueryer is the minimal pgx pool surface PGTicketRepo uses.
+// *pgxpool.Pool satisfies it in production; unit tests inject pgxmock.
+type poolQueryer interface {
+	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+}
+
 // PGTicketRepo is the PostgreSQL TicketRepo implementation (ADR-05,
 // design/32 6.1).
 type PGTicketRepo struct {
-	pool *pgxpool.Pool
+	pool poolQueryer
 }
 
 // NewPGTicketRepo builds a repository over an existing pgx pool.
-func NewPGTicketRepo(pool *pgxpool.Pool) *PGTicketRepo {
+func NewPGTicketRepo(pool poolQueryer) *PGTicketRepo {
 	return &PGTicketRepo{pool: pool}
 }
 

@@ -136,6 +136,9 @@ type Server struct {
 	Tools      ToolRepo
 	Policies   PolicyRepo
 	AuditQuery AuditQueryRepo
+	// Tickets is the read-only approval ticket list for the console
+	// (design/33 3.1.15); nil fails the handler closed.
+	Tickets TicketsRepo
 	// ExportMaxRows caps the synchronous audit CSV export (FR-013
 	// BR-013-03); zero falls back to defaultExportMaxRows.
 	ExportMaxRows int
@@ -196,6 +199,7 @@ func (s *Server) Handler() http.Handler {
 	// so the POST export below is admin-only until that matrix is
 	// widened (follow-up; see audit.go).
 	auditRead := adminauth.RequireRole(adminauth.RoleAdmin, adminauth.RoleAuditor)
+	mux.Handle("GET /v1/admin/approval-tickets", authz(admin(http.HandlerFunc(s.handleTicketsList))))
 	mux.Handle("GET /v1/admin/audit-logs", authz(auditRead(http.HandlerFunc(s.handleAuditLogs))))
 	mux.Handle("POST /v1/admin/audit-logs/export", authz(auditRead(http.HandlerFunc(s.handleAuditExport))))
 

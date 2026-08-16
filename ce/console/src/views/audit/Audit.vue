@@ -140,7 +140,13 @@
         </template>
       </el-table-column>
       <template #empty>
-        <el-empty :description="t('audit.empty')" />
+        <el-empty :description="t('audit.empty')">
+          <div class="empty-actions">
+            <el-button @click="reset">
+              {{ t('common.reset') }}
+            </el-button>
+          </div>
+        </el-empty>
       </template>
     </el-table>
 
@@ -356,4 +362,5 @@ onMounted(() => {
 .pagination { margin-top: var(--adc-space-4); display: flex; align-items: center; justify-content: flex-end; gap: var(--adc-space-2); }
 .page-info { color: var(--adc-text-secondary); margin-right: var(--adc-space-2); }
 .limit { width: 90px; }
+.empty-actions { display: flex; justify-content: center; }
 </style>

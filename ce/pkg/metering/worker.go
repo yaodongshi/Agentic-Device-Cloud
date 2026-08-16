@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"reflect"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -290,10 +291,16 @@ INSERT INTO adc_usage_events
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 ON CONFLICT (idempotency_key) DO NOTHING`
 
+// batchSender is the minimal pgx pool surface pgInserter uses.
+// *pgxpool.Pool satisfies it in production; unit tests inject pgxmock.
+type batchSender interface {
+	SendBatch(ctx context.Context, b *pgx.Batch) pgx.BatchResults
+}
+
 // pgInserter batch-inserts events into adc_usage_events through a pgx
 // pool.
 type pgInserter struct {
-	pool *pgxpool.Pool
+	pool batchSender
 }
 
 func (p *pgInserter) InsertBatch(ctx context.Context, evs []*UsageEvent) error {
@@ -305,7 +312,7 @@ func (p *pgInserter) InsertBatch(ctx context.Context, evs []*UsageEvent) error {
 		// meta is NOT NULL DEFAULT '{}': an explicit NULL would violate
 		// the constraint instead of taking the default, so send {} bytes.
 		meta := any([]byte("{}"))
-		if ev.Meta != nil {
+		if ev.Meta != nil && !isNilValue(ev.Meta) {
 			raw, err := json.Marshal(ev.Meta)
 			if err != nil {
 				return fmt.Errorf("metering: marshal meta: %w", err)
@@ -347,6 +354,17 @@ func classifyPgErr(err error) error {
 		}
 	}
 	return &transientError{err: err}
+}
+
+// isNilValue reports typed nils (a nil map inside an interface is not == nil)
+// so they serialize as {} instead of the JSON literal null.
+func isNilValue(v any) bool {
+	rv := reflect.ValueOf(v)
+	switch rv.Kind() {
+	case reflect.Map, reflect.Slice, reflect.Ptr, reflect.Interface:
+		return rv.IsNil()
+	}
+	return false
 }
 
 // nullIfEmpty maps empty strings to nil so optional varchar columns get

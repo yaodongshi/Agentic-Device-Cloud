@@ -202,7 +202,27 @@
         </template>
       </el-table-column>
       <template #empty>
-        <el-empty :description="hasFilters ? t('devices.searchEmpty') : t('devices.empty')" />
+        <el-empty :description="hasFilters ? t('devices.searchEmpty') : t('devices.empty')">
+          <div class="empty-actions">
+            <el-button
+              v-if="hasFilters"
+              @click="reset"
+            >
+              {{ t('common.reset') }}
+            </el-button>
+            <template v-else>
+              <el-button
+                type="primary"
+                @click="openRegister"
+              >
+                {{ t('devices.register') }}
+              </el-button>
+              <el-button @click="openGuide">
+                {{ t('devices.guide') }}
+              </el-button>
+            </template>
+          </div>
+        </el-empty>
       </template>
     </el-table>
 
@@ -350,6 +370,7 @@ import { api } from '@/api/request'
 import { errorMessage } from '@/api/errors'
 import { copyText } from '@/utils/clipboard'
 import { formatTime } from '@/utils/format'
+import { DOCS_URL } from '@/utils/links'
 import type {
   Device,
   DeviceAuthType,
@@ -455,6 +476,12 @@ function openRegister() {
   registerVisible.value = true
 }
 
+// The docs site ships with FR-020; until then the repo README is the
+// integration guide entry point (links.ts).
+function openGuide() {
+  window.open(DOCS_URL, '_blank', 'noopener')
+}
+
 async function submitRegister() {
   const valid = await registerFormRef.value?.validate().catch(() => false)
   if (!valid) return
@@ -542,4 +569,5 @@ onMounted(fetchList)
 .credential-box { display: flex; gap: var(--adc-space-2); margin: var(--adc-space-4) 0 var(--adc-space-3); }
 .credential-box .el-input { flex: 1; }
 .muted { color: var(--adc-text-secondary); }
+.empty-actions { display: flex; justify-content: center; gap: var(--adc-space-2); }
 </style>

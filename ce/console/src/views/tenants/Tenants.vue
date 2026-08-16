@@ -149,7 +149,23 @@
         </template>
       </el-table-column>
       <template #empty>
-        <el-empty :description="hasFilters ? t('tenants.searchEmpty') : t('tenants.empty')" />
+        <el-empty :description="hasFilters ? t('tenants.searchEmpty') : t('tenants.empty')">
+          <div class="empty-actions">
+            <el-button
+              v-if="hasFilters"
+              @click="reset"
+            >
+              {{ t('common.reset') }}
+            </el-button>
+            <el-button
+              v-else
+              type="primary"
+              @click="openCreate"
+            >
+              {{ t('tenants.create') }}
+            </el-button>
+          </div>
+        </el-empty>
       </template>
     </el-table>
 
@@ -600,4 +616,5 @@ onMounted(fetchList)
 .reason { padding: var(--adc-space-2) 0; }
 .edit-name { font-weight: 600; margin-bottom: var(--adc-space-3); }
 .muted { color: var(--adc-text-secondary); }
+.empty-actions { display: flex; justify-content: center; }
 </style>

@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
 
 	"adc.dev/ce/internal/adminauth"
 	"adc.dev/ce/internal/auth"
@@ -584,11 +583,11 @@ const deviceCols = `id::text, tenant_id::text, COALESCE(group_id::text,''), devi
 
 // pgDeviceRepo is the PostgreSQL DeviceRepo (design/32 3.5).
 type pgDeviceRepo struct {
-	pool *pgxpool.Pool
+	pool pgxPooler
 }
 
 // NewPGDeviceRepo builds a device repository over an existing pgx pool.
-func NewPGDeviceRepo(pool *pgxpool.Pool) *pgDeviceRepo {
+func NewPGDeviceRepo(pool pgxPooler) *pgDeviceRepo {
 	return &pgDeviceRepo{pool: pool}
 }
 
@@ -755,7 +754,9 @@ func (r *pgDeviceRepo) ResetCredential(ctx context.Context, deviceID string, cre
 	if getErr != nil {
 		return nil, getErr
 	}
-	if cur.Status == "FROZEN" {
+	// cur.Status carries the API spelling (lowercase, see finishScan);
+	// the UPDATE above used the DB spelling 'FROZEN'.
+	if cur.Status == deviceStatusFrozen {
 		return nil, ErrDeviceFrozen
 	}
 	return nil, ErrDeviceNotFound

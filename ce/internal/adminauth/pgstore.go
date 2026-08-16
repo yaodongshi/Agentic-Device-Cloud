@@ -18,16 +18,22 @@ import (
 	"strings"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+// poolQueryer is the minimal pgx pool surface PGUserStore uses.
+// *pgxpool.Pool satisfies it in production; unit tests inject pgxmock.
+type poolQueryer interface {
+	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+}
 
 // PGUserStore is the PostgreSQL-backed adminauth.UserStore.
 type PGUserStore struct {
-	pool *pgxpool.Pool
+	pool poolQueryer
 }
 
 // NewPGUserStore builds a PG user store over an existing pgx pool.
-func NewPGUserStore(pool *pgxpool.Pool) *PGUserStore {
+func NewPGUserStore(pool poolQueryer) *PGUserStore {
 	return &PGUserStore{pool: pool}
 }
 

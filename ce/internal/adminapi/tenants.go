@@ -11,7 +11,6 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
-	"github.com/jackc/pgx/v5/pgxpool"
 
 	"adc.dev/ce/internal/adminauth"
 	"adc.dev/ce/internal/httpx"
@@ -426,11 +425,11 @@ type tenantMeta struct {
 
 // pgTenantRepo is the PostgreSQL TenantRepo (design/32 3.1).
 type pgTenantRepo struct {
-	pool *pgxpool.Pool
+	pool pgxPooler
 }
 
 // NewPGTenantRepo builds a tenant repository over an existing pgx pool.
-func NewPGTenantRepo(pool *pgxpool.Pool) *pgTenantRepo {
+func NewPGTenantRepo(pool pgxPooler) *pgTenantRepo {
 	return &pgTenantRepo{pool: pool}
 }
 

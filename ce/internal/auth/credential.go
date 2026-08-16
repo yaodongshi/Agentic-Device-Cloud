@@ -10,7 +10,6 @@ import (
 	"fmt"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 // AuthType values mirror the adc_devices.auth_type CHECK constraint
@@ -45,18 +44,24 @@ type CredentialRepo interface {
 	Load(ctx context.Context, deviceCode string) (*DeviceCredential, error)
 }
 
+// rowQuerier is the minimal pgx pool surface pgCredentialRepo uses.
+// *pgxpool.Pool satisfies it in production; unit tests inject pgxmock.
+type rowQuerier interface {
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+}
+
 // pgCredentialRepo reads adc_devices with pgx parameterized queries.
 // hmac signing keys are stored KEK-encrypted (LLD 3.1.3) and decrypted in
 // memory at load time; a missing or wrong KEK fails closed.
 type pgCredentialRepo struct {
-	pool *pgxpool.Pool
+	pool rowQuerier
 	kek  []byte // ADC_DEVICE_KEK, derived to a 32-byte AES key by LoadKEK
 }
 
 // NewCredentialRepo builds the PostgreSQL-backed CredentialRepo.
 // kek may be nil only for deployments that never serve hmac devices; any
 // hmac load then fails closed with a decrypt error.
-func NewCredentialRepo(pool *pgxpool.Pool, kek []byte) CredentialRepo {
+func NewCredentialRepo(pool rowQuerier, kek []byte) CredentialRepo {
 	return &pgCredentialRepo{pool: pool, kek: kek}
 }
 

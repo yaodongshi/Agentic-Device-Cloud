@@ -20,7 +20,23 @@ export async function request<T>(path: string, init: RequestInit = {}): Promise<
   if (!headers.has('Content-Type') && init.body) headers.set('Content-Type', 'application/json')
   if (token) headers.set('Authorization', `Bearer ${token}`)
 
-  const res = await fetch(`${BASE}${path}`, { ...init, headers })
+  // Platform admins must scope admin endpoints to a tenant explicitly
+  // (design/33 1.2); the login response tenant is the default scope.
+  let resolved = path
+  if (path.startsWith('/v1/admin/') && !path.includes('tenant_id=')) {
+    let tid = ''
+    try {
+      const u = JSON.parse(localStorage.getItem('adc_user') ?? '{}')
+      tid = u.tenantId ?? ''
+    } catch {
+      tid = ''
+    }
+    if (tid) {
+      resolved += (path.includes('?') ? '&' : '?') + 'tenant_id=' + encodeURIComponent(tid)
+    }
+  }
+
+  const res = await fetch(`${BASE}${resolved}`, { ...init, headers })
   const text = await res.text()
   const body = text ? JSON.parse(text) : undefined
 
