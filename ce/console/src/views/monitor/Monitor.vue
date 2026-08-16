@@ -105,12 +105,268 @@
         </div>
       </el-col>
     </el-row>
+
+    <!-- FR-017 threshold alert rules (design/82 B2): tenant-scoped editor,
+         PUT full-replace semantics, change_reason goes to the audit log.
+         Admin roles only; other roles get a hint instead of dead controls. -->
+    <el-card
+      v-if="canEditAlerts"
+      class="alerts"
+    >
+      <template #header>
+        <div class="alerts-head">
+          <span>{{ t('monitor.alertsRulesTitle') }}</span>
+          <span class="muted">{{ t('monitor.alertsAggregationHint') }}</span>
+        </div>
+      </template>
+      <el-alert
+        v-if="rulesError"
+        class="stale"
+        type="warning"
+        :title="t('monitor.alertsRulesLoadFailed')"
+        show-icon
+        :closable="false"
+      />
+      <el-table
+        v-loading="rulesLoading"
+        :data="ruleDrafts"
+        size="small"
+      >
+        <el-table-column
+          :label="t('monitor.alertsRuleName')"
+          min-width="180"
+        >
+          <template #default="{ row }">
+            <el-input
+              v-model="row.name"
+              size="small"
+              :placeholder="t('monitor.alertsRuleNamePlaceholder')"
+            />
+          </template>
+        </el-table-column>
+        <el-table-column
+          :label="t('monitor.alertsMetric')"
+          min-width="240"
+        >
+          <template #default="{ row }">
+            <el-select
+              v-model="row.metric"
+              size="small"
+            >
+              <el-option
+                v-for="opt in ALERT_METRIC_OPTIONS"
+                :key="opt.name"
+                :label="opt.name"
+                :value="opt.name"
+              />
+            </el-select>
+          </template>
+        </el-table-column>
+        <el-table-column
+          :label="t('monitor.alertsOperator')"
+          width="90"
+        >
+          <template #default="{ row }">
+            <el-select
+              v-model="row.operator"
+              size="small"
+            >
+              <el-option
+                v-for="op in ALERT_OPERATORS"
+                :key="op"
+                :label="op"
+                :value="op"
+              />
+            </el-select>
+          </template>
+        </el-table-column>
+        <el-table-column
+          :label="t('monitor.alertsThreshold')"
+          width="140"
+        >
+          <template #default="{ row }">
+            <el-input-number
+              v-model="row.threshold"
+              size="small"
+              :min="0"
+              :controls="false"
+            />
+          </template>
+        </el-table-column>
+        <el-table-column
+          :label="t('monitor.alertsDuration')"
+          width="130"
+        >
+          <template #default="{ row }">
+            <el-input-number
+              v-model="row.durationSec"
+              size="small"
+              :min="0"
+              :max="3600"
+              :step="30"
+            />
+          </template>
+        </el-table-column>
+        <el-table-column
+          :label="t('monitor.alertsSeverity')"
+          width="90"
+        >
+          <template #default="{ row }">
+            <el-select
+              v-model="row.severity"
+              size="small"
+            >
+              <el-option
+                v-for="sev in ALERT_SEVERITIES"
+                :key="sev"
+                :label="sev"
+                :value="sev"
+              />
+            </el-select>
+          </template>
+        </el-table-column>
+        <el-table-column
+          :label="t('monitor.alertsEnabled')"
+          width="80"
+        >
+          <template #default="{ row }">
+            <el-switch v-model="row.enabled" />
+          </template>
+        </el-table-column>
+        <el-table-column
+          :label="t('common.actions')"
+          width="80"
+        >
+          <template #default="{ $index }">
+            <el-button
+              size="small"
+              text
+              type="danger"
+              @click="removeRule($index)"
+            >
+              {{ t('monitor.alertsDelete') }}
+            </el-button>
+          </template>
+        </el-table-column>
+        <template #empty>
+          {{ t('monitor.alertsRulesEmpty') }}
+        </template>
+      </el-table>
+      <div class="alerts-toolbar">
+        <el-button
+          size="small"
+          @click="addRule"
+        >
+          {{ t('monitor.alertsAddRule') }}
+        </el-button>
+        <el-input
+          v-model="saveReason"
+          size="small"
+          class="reason"
+          :placeholder="t('common.reasonPlaceholder')"
+        />
+        <el-button
+          type="primary"
+          size="small"
+          :loading="rulesSaving"
+          @click="saveRules"
+        >
+          {{ t('common.save') }}
+        </el-button>
+      </div>
+    </el-card>
+
+    <!-- FR-017 fired-alert history: newest first, aggregated (one row per
+         dedup window), severity tags P1-P3. -->
+    <el-card
+      v-if="canEditAlerts"
+      class="alerts"
+    >
+      <template #header>
+        <div class="alerts-head">
+          <span>{{ t('monitor.alertsEventsTitle') }}</span>
+          <el-button
+            size="small"
+            text
+            :loading="eventsLoading"
+            @click="loadAlertData"
+          >
+            {{ t('monitor.refresh') }}
+          </el-button>
+        </div>
+      </template>
+      <el-alert
+        v-if="eventsError"
+        class="stale"
+        type="warning"
+        :title="t('monitor.alertsEventsLoadFailed')"
+        show-icon
+        :closable="false"
+      />
+      <el-table
+        v-loading="eventsLoading"
+        :data="alertEvents"
+        size="small"
+      >
+        <el-table-column
+          :label="t('monitor.alertsSeverity')"
+          width="90"
+        >
+          <template #default="{ row }">
+            <el-tag
+              size="small"
+              :type="severityTagType(row.severity)"
+            >
+              {{ row.severity }}
+            </el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column
+          prop="rule_name"
+          :label="t('monitor.alertsRuleName')"
+          min-width="160"
+        />
+        <el-table-column
+          prop="metric"
+          :label="t('monitor.alertsMetric')"
+          min-width="220"
+        />
+        <el-table-column
+          :label="t('monitor.alertsObserved')"
+          min-width="160"
+        >
+          <template #default="{ row }">
+            {{ formatNumber(row.observed) }} {{ row.operator }} {{ formatNumber(row.threshold) }}
+          </template>
+        </el-table-column>
+        <el-table-column
+          :label="t('monitor.alertsFiredAt')"
+          min-width="170"
+        >
+          <template #default="{ row }">
+            {{ new Date(row.fired_at).toLocaleString() }}
+          </template>
+        </el-table-column>
+        <template #empty>
+          {{ t('monitor.alertsEventsEmpty') }}
+        </template>
+      </el-table>
+    </el-card>
+    <el-alert
+      v-else
+      class="stale"
+      type="info"
+      :title="t('monitor.alertsAdminOnly')"
+      show-icon
+      :closable="false"
+    />
   </el-card>
 </template>
 
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { ElMessage } from 'element-plus'
 import * as echarts from 'echarts/core'
 import { BarChart, LineChart, PieChart } from 'echarts/charts'
 import { GridComponent, LegendComponent, TooltipComponent } from 'echarts/components'
@@ -118,6 +374,14 @@ import { CanvasRenderer } from 'echarts/renderers'
 import { ALL_TENANTS_LABEL, fetchMetricsSnapshot } from '@/utils/metrics'
 import type { MonitorSnapshot } from '@/utils/metrics'
 import { formatCompact } from '@/utils/format'
+import { useAuthStore } from '@/stores/auth'
+import {
+  ALERT_METRIC_OPTIONS,
+  fetchAlertEvents,
+  fetchAlertRules,
+  saveAlertRules,
+} from '@/api/alerts'
+import type { AlertEvent, AlertOperator, AlertSeverity } from '@/api/alerts'
 
 // ECharts over hand-rolled SVG: four different chart types (line/bar/donut/
 // line with a dashed threshold markLine) plus tooltips, legends, window
@@ -127,12 +391,19 @@ import { formatCompact } from '@/utils/format'
 echarts.use([LineChart, BarChart, PieChart, GridComponent, TooltipComponent, LegendComponent, CanvasRenderer])
 
 const { t, tm } = useI18n()
+const auth = useAuthStore()
 
 // Auto refresh interval per design/20 4.12; the P95 threshold line per
 // design/20 6.6 (500ms dashed red).
 const REFRESH_INTERVAL_MS = 30000
 const P95_THRESHOLD_MS = 500
 const CALLS_BAR_MAX_TENANTS = 8
+const ALERT_EVENTS_LIMIT = 50
+
+// Alert rule editor constants (mirror the backend whitelist/validators in
+// internal/alerts, design/82 B2).
+const ALERT_OPERATORS: AlertOperator[] = ['>', '<', '>=']
+const ALERT_SEVERITIES: AlertSeverity[] = ['P1', 'P2', 'P3']
 
 // The history is a rolling in-memory window: /metrics is instantaneous
 // (Prometheus snapshot), so the selected range only controls how many
@@ -144,11 +415,39 @@ interface HistoryPoint {
   value: number
 }
 
+// Editable draft of one rule row: ids round-trip through GET/PUT so the
+// backend keeps dedup state stable; duration uses seconds on the wire.
+interface RuleDraft {
+  id: string
+  name: string
+  metric: string
+  operator: AlertOperator
+  threshold: number
+  durationSec: number
+  severity: AlertSeverity
+  enabled: boolean
+}
+
 const range = ref('24h')
 const autoRefresh = ref(true)
 const loading = ref(false)
 const error = ref(false)
 const lastUpdated = ref<Date | null>(null)
+
+// FR-017 alert state: rules are only editable by admin-tier roles
+// (platform_admin / tenant_admin); the RBAC matrix denies the endpoints
+// for auditors, so the sections hide instead of showing 403 noise.
+const canEditAlerts = computed(
+  () => auth.user?.role === 'platform_admin' || auth.user?.role === 'tenant_admin',
+)
+const ruleDrafts = ref<RuleDraft[]>([])
+const rulesLoading = ref(false)
+const rulesSaving = ref(false)
+const rulesError = ref(false)
+const saveReason = ref('')
+const alertEvents = ref<AlertEvent[]>([])
+const eventsLoading = ref(false)
+const eventsError = ref(false)
 
 const snapshot = reactive(emptySnapshot())
 const onlineHistory = ref<HistoryPoint[]>([])
@@ -208,6 +507,124 @@ async function refreshNow() {
   } finally {
     loading.value = false
   }
+  if (canEditAlerts.value) await loadAlertData()
+}
+
+// FR-017 alert data load: rules and fired events share the refresh cycle.
+function loadAlertData() {
+  return Promise.all([loadRules(), loadEvents()])
+}
+
+async function loadRules() {
+  rulesLoading.value = true
+  try {
+    const rules = await fetchAlertRules()
+    ruleDrafts.value = rules.map((r) => ({
+      id: r.id,
+      name: r.name,
+      metric: r.metric,
+      operator: r.operator,
+      threshold: r.threshold,
+      durationSec: r.duration_sec,
+      severity: r.severity,
+      enabled: r.enabled,
+    }))
+    rulesError.value = false
+  } catch {
+    rulesError.value = true
+  } finally {
+    rulesLoading.value = false
+  }
+}
+
+async function loadEvents() {
+  eventsLoading.value = true
+  try {
+    alertEvents.value = await fetchAlertEvents(ALERT_EVENTS_LIMIT)
+    eventsError.value = false
+  } catch {
+    eventsError.value = true
+  } finally {
+    eventsLoading.value = false
+  }
+}
+
+function addRule() {
+  ruleDrafts.value.push({
+    id: '',
+    name: '',
+    metric: ALERT_METRIC_OPTIONS[0]?.name ?? '',
+    operator: '>',
+    threshold: 0,
+    durationSec: 0,
+    severity: 'P2',
+    enabled: true,
+  })
+}
+
+function removeRule(index: number) {
+  ruleDrafts.value.splice(index, 1)
+}
+
+async function saveRules() {
+  if (rulesSaving.value) return
+  if (ruleDrafts.value.some((r) => !r.name.trim())) {
+    ElMessage.warning(t('monitor.alertsRuleNameRequired'))
+    return
+  }
+  if (!saveReason.value.trim()) {
+    ElMessage.warning(t('common.reasonRequired'))
+    return
+  }
+  rulesSaving.value = true
+  try {
+    const saved = await saveAlertRules({
+      rules: ruleDrafts.value.map((r) => ({
+        id: r.id || undefined,
+        name: r.name.trim(),
+        metric: r.metric,
+        operator: r.operator,
+        threshold: r.threshold,
+        duration_sec: r.durationSec,
+        severity: r.severity,
+        enabled: r.enabled,
+      })),
+      change_reason: saveReason.value.trim(),
+    })
+    ruleDrafts.value = saved.map((r) => ({
+      id: r.id,
+      name: r.name,
+      metric: r.metric,
+      operator: r.operator,
+      threshold: r.threshold,
+      durationSec: r.duration_sec,
+      severity: r.severity,
+      enabled: r.enabled,
+    }))
+    saveReason.value = ''
+    rulesError.value = false
+    ElMessage.success(t('monitor.alertsSaveSuccess'))
+  } catch {
+    ElMessage.error(t('monitor.alertsSaveFailed'))
+  } finally {
+    rulesSaving.value = false
+  }
+}
+
+function severityTagType(severity: AlertSeverity): 'danger' | 'warning' | 'info' {
+  switch (severity) {
+    case 'P1':
+      return 'danger'
+    case 'P2':
+      return 'warning'
+    default:
+      return 'info'
+  }
+}
+
+// Metric values keep their natural precision: integers render as integers.
+function formatNumber(v: number): string {
+  return Number.isInteger(v) ? String(v) : v.toFixed(2).replace(/\.?0+$/, '')
 }
 
 function pushHistory(snap: MonitorSnapshot) {
@@ -421,4 +838,8 @@ onBeforeUnmount(() => {
 .big-number { font-size: 22px; font-weight: 700; color: var(--adc-brand); }
 .big-number.blocked { font-size: 14px; color: var(--adc-risk-3, #dc2626); }
 .chart { height: 260px; }
+.alerts { margin-bottom: var(--adc-space-4); }
+.alerts-head { display: flex; align-items: baseline; justify-content: space-between; gap: var(--adc-space-3); }
+.alerts-toolbar { display: flex; align-items: center; gap: var(--adc-space-3); margin-top: var(--adc-space-3); flex-wrap: wrap; }
+.reason { max-width: 320px; }
 </style>

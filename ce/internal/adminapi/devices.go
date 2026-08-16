@@ -124,8 +124,14 @@ type DeviceRepo interface {
 	// slot in the same transaction (design/32 6.2).
 	Register(ctx context.Context, d *Device, cred DeviceCredential) (*Device, error)
 	Get(ctx context.Context, deviceID string) (*Device, error)
+	// GetByCode loads one device by its globally unique code, including
+	// soft-deleted rows (uq_devices_code burns codes forever, FR-011).
+	GetByCode(ctx context.Context, deviceCode string) (*Device, error)
 	List(ctx context.Context, tenantID string, f DeviceFilter, p Page) ([]Device, int, error)
 	SetStatus(ctx context.Context, deviceID, status string) (*Device, error)
+	// SetGroup attaches/detaches the device group (FR-011); a nil groupID
+	// detaches.
+	SetGroup(ctx context.Context, deviceID string, groupID *string) (*Device, error)
 	// ResetCredential stores a fresh credential and bumps
 	// credential_version; ErrDeviceFrozen when frozen (design/33 11003).
 	ResetCredential(ctx context.Context, deviceID string, cred DeviceCredential) (*Device, error)
@@ -241,12 +247,16 @@ type deviceListResponse struct {
 	PageSize int              `json:"page_size"`
 }
 
-// patchDeviceRequest mirrors design/33 3.1.8.
+// patchDeviceRequest mirrors design/33 3.1.8. GroupID extends the
+// update_meta op for FR-011 group management: nil leaves the group
+// unchanged, "" detaches, a UUID attaches (existence and ownership are
+// verified by the handler).
 type patchDeviceRequest struct {
 	Op           string         `json:"op"`
 	ChangeReason string         `json:"change_reason"`
 	Name         *string        `json:"name"`
 	Metadata     map[string]any `json:"metadata"`
+	GroupID      *string        `json:"group_id"`
 }
 
 type devicePatchResponse struct {
@@ -444,13 +454,34 @@ func (s *Server) handlePatchDevice(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, http.StatusBadRequest, codeBadRequest, "change_reason is required")
 		return
 	}
-	if req.Op == opUpdateMeta && req.Name == nil && req.Metadata == nil {
-		writeError(w, r, http.StatusBadRequest, codeBadRequest, "name or metadata is required for update_meta")
+	if req.Op == opUpdateMeta && req.Name == nil && req.Metadata == nil && req.GroupID == nil {
+		writeError(w, r, http.StatusBadRequest, codeBadRequest, "name, metadata or group_id is required for update_meta")
 		return
 	}
 	if req.Name != nil && (*req.Name == "" || len(*req.Name) > 255) {
 		writeError(w, r, http.StatusBadRequest, codeBadRequest, "name must be 1-255 chars")
 		return
+	}
+	// FR-011 group assignment: resolve the target group before touching
+	// the ledger. "" detaches; a UUID must exist in this tenant. Only the
+	// update_meta op accepts group_id.
+	var (
+		groupSet bool
+		groupNew *string
+	)
+	if req.Op == opUpdateMeta && req.GroupID != nil {
+		if s.Groups == nil {
+			writeError(w, r, http.StatusInternalServerError, codeInternal, "device groups not configured")
+			return
+		}
+		if *req.GroupID != "" {
+			g, ok := s.loadOwnedGroup(w, r, p, *req.GroupID)
+			if !ok {
+				return
+			}
+			groupNew = &g.ID
+		}
+		groupSet = true
 	}
 	dev, err := s.Devices.Get(r.Context(), deviceID)
 	if err != nil {
@@ -499,6 +530,9 @@ func (s *Server) handlePatchDevice(w http.ResponseWriter, r *http.Request) {
 		updated, err = s.Devices.ResetCredential(r.Context(), deviceID, DeviceCredential{Stored: stored})
 	case opUpdateMeta:
 		updated, err = s.Devices.UpdateMeta(r.Context(), deviceID, req.Name, req.Metadata)
+		if err == nil && groupSet {
+			updated, err = s.Devices.SetGroup(r.Context(), deviceID, groupNew)
+		}
 	}
 	if err != nil {
 		mapDeviceRepoError(w, r, err)
@@ -673,6 +707,22 @@ func (r *pgDeviceRepo) Get(ctx context.Context, deviceID string) (*Device, error
 	return d, nil
 }
 
+// GetByCode loads one device by its globally unique code. Soft-deleted
+// rows are included: uq_devices_code has no deleted_at predicate, so a
+// retired device still blocks re-registration of its code (FR-011).
+func (r *pgDeviceRepo) GetByCode(ctx context.Context, deviceCode string) (*Device, error) {
+	row := r.pool.QueryRow(ctx, `SELECT `+deviceCols+` FROM adc_devices
+		WHERE device_code = $1`, deviceCode)
+	d, err := scanDevice(row)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrDeviceNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	return d, nil
+}
+
 // List pages the tenant device ledger with filter sentinels and the window
 // total (design/33 3.1.7).
 func (r *pgDeviceRepo) List(ctx context.Context, tenantID string, f DeviceFilter, p Page) ([]Device, int, error) {
@@ -724,6 +774,24 @@ func (r *pgDeviceRepo) SetStatus(ctx context.Context, deviceID, status string) (
 		SET status = $2, updated_at = now()
 		WHERE id = $1::uuid AND deleted_at IS NULL
 		RETURNING `+deviceCols, deviceID, apiDeviceStatus(status))
+	d, err := scanDevice(row)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrDeviceNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	return d, nil
+}
+
+// SetGroup attaches/detaches the device group (FR-011); a nil groupID
+// writes NULL (detach). The caller verifies group existence and tenant
+// ownership before invoking.
+func (r *pgDeviceRepo) SetGroup(ctx context.Context, deviceID string, groupID *string) (*Device, error) {
+	row := r.pool.QueryRow(ctx, `UPDATE adc_devices
+		SET group_id = $2::uuid, updated_at = now()
+		WHERE id = $1::uuid AND deleted_at IS NULL
+		RETURNING `+deviceCols, deviceID, groupID)
 	d, err := scanDevice(row)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrDeviceNotFound

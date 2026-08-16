@@ -84,6 +84,61 @@ export interface DevicePatchResponse {
   updated_at: string
 }
 
+/** Body of PATCH /v1/admin/devices/{id} op=update_meta (FR-011 group assignment). */
+export interface DeviceGroupAssignmentPayload {
+  op: 'update_meta'
+  change_reason: string
+  group_id: string
+}
+
+/**
+ * Batch import (FR-011, design/33 3.1.9). POST /v1/admin/devices/import
+ * answers 202 with the task handle; the poll endpoint returns the job
+ * snapshot below until status reaches done/failed.
+ */
+export type ImportJobStatus = 'queued' | 'running' | 'done' | 'failed'
+
+export interface ImportAcceptedResponse {
+  task_id: string
+  status: ImportJobStatus
+  status_url: string
+}
+
+export interface ImportRowError {
+  /** CSV line number, header = 1. */
+  row: number
+  device_code: string
+  /** design/33 business code: 10001 field / 11008 duplicate / 11010 quota. */
+  code: string
+  message: string
+}
+
+export interface ImportJob {
+  task_id: string
+  status: ImportJobStatus
+  dry_run: boolean
+  total_rows: number
+  processed: number
+  success: number
+  failed: number
+  errors: ImportRowError[]
+  error_msg?: string
+  created_at: string
+  started_at: string
+  finished_at?: string | null
+  status_url?: string
+}
+
+/** Device group row (FR-011, design/33 3.1.19). */
+export interface DeviceGroup {
+  group_id: string
+  name: string
+  description: string
+  parent_id?: string | null
+  created_at: string
+  updated_at: string
+}
+
 export type ApiKeyStatus = 'active' | 'revoked' | 'expired'
 
 /** Tool permission scope (design/33 3.1.12). */

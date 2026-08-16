@@ -32,12 +32,14 @@ var testKEK = bytes.Repeat([]byte("k"), 32)
 func uuidOf(n int) string { return fmt.Sprintf("00000000-0000-4000-8000-%012d", n) }
 
 type memStore struct {
-	tenants   *memTenantRepo
-	devices   *memDeviceRepo
-	keys      *memApiKeyRepo
-	tools     *memToolRepo
-	auditLogs *memAuditQueryRepo
-	policies  *memPolicyRepo
+	tenants    *memTenantRepo
+	devices    *memDeviceRepo
+	keys       *memApiKeyRepo
+	tools      *memToolRepo
+	auditLogs  *memAuditQueryRepo
+	policies   *memPolicyRepo
+	groups     *memGroupRepo
+	importJobs *memImportJobRepo
 }
 
 func newMemStore() *memStore {
@@ -48,6 +50,8 @@ func newMemStore() *memStore {
 	s.tools = newMemToolRepo(s.devices)
 	s.auditLogs = newMemAuditQueryRepo()
 	s.policies = newMemPolicyRepo(s.tenants)
+	s.groups = newMemGroupRepo(s.tenants, s.devices)
+	s.importJobs = newMemImportJobRepo()
 	s.tenants.deviceCount = s.devices.count
 	s.tenants.keyCount = s.keys.count
 	now := func() time.Time { return fixedNow }
@@ -57,6 +61,8 @@ func newMemStore() *memStore {
 	s.tools.now = now
 	s.auditLogs.now = now
 	s.policies.now = now
+	s.groups.now = now
+	s.importJobs.now = now
 	return s
 }
 
@@ -284,6 +290,48 @@ func (r *memDeviceRepo) Get(ctx context.Context, deviceID string) (*Device, erro
 		return nil, ErrDeviceNotFound
 	}
 	return cloneDevice(&rec.d), nil
+}
+
+func (r *memDeviceRepo) GetByCode(ctx context.Context, deviceCode string) (*Device, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	id, ok := r.byCode[deviceCode]
+	if !ok {
+		return nil, ErrDeviceNotFound
+	}
+	// byCode keeps burned codes forever (matches uq_devices_code).
+	return cloneDevice(&r.devices[id].d), nil
+}
+
+func (r *memDeviceRepo) SetGroup(ctx context.Context, deviceID string, groupID *string) (*Device, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	rec, ok := r.lockGet(deviceID)
+	if !ok {
+		return nil, ErrDeviceNotFound
+	}
+	if groupID == nil {
+		rec.d.GroupID = nil
+	} else {
+		g := *groupID
+		rec.d.GroupID = &g
+	}
+	rec.d.UpdatedAt = r.now().UTC()
+	return cloneDevice(&rec.d), nil
+}
+
+// detachGroup clears the group of every device (group delete, design/32
+// 3.4 "删组时设备自动脱组"). Called with the group lock held; takes the
+// device lock itself (devices never acquire the group lock, so the order
+// is deadlock-free).
+func (r *memDeviceRepo) detachGroup(groupID string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, rec := range r.devices {
+		if !rec.del && rec.d.GroupID != nil && *rec.d.GroupID == groupID {
+			rec.d.GroupID = nil
+		}
+	}
 }
 
 func (r *memDeviceRepo) List(ctx context.Context, tenantID string, f DeviceFilter, p Page) ([]Device, int, error) {
@@ -613,6 +661,198 @@ func (r *memApiKeyRepo) Rotate(ctx context.Context, keyID string, k *NewKey, rea
 	return cloneApiKey(&rec.k), nil
 }
 
+// --- device groups ---
+
+type memGroupRepo struct {
+	mu      sync.Mutex
+	groups  map[string]*DeviceGroup
+	tenants *memTenantRepo
+	devices *memDeviceRepo
+	nextID  int
+	now     func() time.Time
+}
+
+func newMemGroupRepo(tenants *memTenantRepo, devices *memDeviceRepo) *memGroupRepo {
+	return &memGroupRepo{
+		groups:  map[string]*DeviceGroup{},
+		tenants: tenants,
+		devices: devices,
+		now:     time.Now,
+	}
+}
+
+func cloneGroup(g *DeviceGroup) *DeviceGroup {
+	if g == nil {
+		return nil
+	}
+	cp := *g
+	if g.ParentID != nil {
+		p := *g.ParentID
+		cp.ParentID = &p
+	}
+	return &cp
+}
+
+func (r *memGroupRepo) tenantGate(tenantID string) error {
+	t, err := r.tenants.Get(context.Background(), tenantID)
+	if err != nil {
+		return err
+	}
+	if t.Status != tenantStatusActive {
+		return ErrTenantSuspended
+	}
+	return nil
+}
+
+func (r *memGroupRepo) Create(ctx context.Context, g *DeviceGroup) (*DeviceGroup, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if err := r.tenantGate(g.TenantID); err != nil {
+		return nil, err
+	}
+	for _, cur := range r.groups {
+		if cur.TenantID == g.TenantID && cur.Name == g.Name {
+			return nil, ErrGroupNameExists
+		}
+	}
+	r.nextID++
+	now := r.now().UTC()
+	cp := cloneGroup(g)
+	cp.ID = uuidOf(300000 + r.nextID)
+	if cp.CreatedAt.IsZero() {
+		cp.CreatedAt = now
+	}
+	if cp.UpdatedAt.IsZero() {
+		cp.UpdatedAt = now
+	}
+	r.groups[cp.ID] = cp
+	return cloneGroup(cp), nil
+}
+
+func (r *memGroupRepo) Get(ctx context.Context, groupID string) (*DeviceGroup, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	g, ok := r.groups[groupID]
+	if !ok {
+		return nil, ErrGroupNotFound
+	}
+	return cloneGroup(g), nil
+}
+
+func (r *memGroupRepo) List(ctx context.Context, tenantID string, p Page) ([]DeviceGroup, int, error) {
+	r.mu.Lock()
+	var all []*DeviceGroup
+	for _, g := range r.groups {
+		if g.TenantID == tenantID {
+			all = append(all, cloneGroup(g))
+		}
+	}
+	sort.Slice(all, func(i, j int) bool {
+		if all[i].CreatedAt.Equal(all[j].CreatedAt) {
+			return all[i].ID < all[j].ID
+		}
+		return all[i].CreatedAt.After(all[j].CreatedAt)
+	})
+	r.mu.Unlock()
+	total := len(all)
+	start := p.offset()
+	if start > len(all) {
+		start = len(all)
+	}
+	end := start + p.Size
+	if end > len(all) {
+		end = len(all)
+	}
+	out := make([]DeviceGroup, 0, end-start)
+	for _, g := range all[start:end] {
+		out = append(out, *g)
+	}
+	return out, total, nil
+}
+
+func (r *memGroupRepo) Update(ctx context.Context, groupID string, name, description *string) (*DeviceGroup, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	g, ok := r.groups[groupID]
+	if !ok {
+		return nil, ErrGroupNotFound
+	}
+	if name != nil {
+		for _, cur := range r.groups {
+			if cur.ID != groupID && cur.TenantID == g.TenantID && cur.Name == *name {
+				return nil, ErrGroupNameExists
+			}
+		}
+		g.Name = *name
+	}
+	if description != nil {
+		g.Description = *description
+	}
+	g.UpdatedAt = r.now().UTC()
+	return cloneGroup(g), nil
+}
+
+func (r *memGroupRepo) Delete(ctx context.Context, groupID string) error {
+	r.mu.Lock()
+	if _, ok := r.groups[groupID]; !ok {
+		r.mu.Unlock()
+		return ErrGroupNotFound
+	}
+	delete(r.groups, groupID)
+	r.devices.detachGroup(groupID)
+	r.mu.Unlock()
+	return nil
+}
+
+// --- import jobs ---
+
+type memImportJobRepo struct {
+	mu   sync.Mutex
+	jobs map[string]*ImportJob
+	now  func() time.Time
+}
+
+func newMemImportJobRepo() *memImportJobRepo {
+	return &memImportJobRepo{jobs: map[string]*ImportJob{}, now: time.Now}
+}
+
+func cloneImportJob(j *ImportJob) *ImportJob {
+	if j == nil {
+		return nil
+	}
+	cp := *j
+	cp.Errors = append([]ImportRowError(nil), j.Errors...)
+	if j.FinishedAt != nil {
+		f := *j.FinishedAt
+		cp.FinishedAt = &f
+	}
+	return &cp
+}
+
+func (r *memImportJobRepo) Create(ctx context.Context, j *ImportJob) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.jobs[j.TaskID] = cloneImportJob(j)
+	return nil
+}
+
+func (r *memImportJobRepo) Update(ctx context.Context, j *ImportJob) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.jobs[j.TaskID] = cloneImportJob(j)
+	return nil
+}
+
+func (r *memImportJobRepo) Get(ctx context.Context, jobID string) (*ImportJob, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	j, ok := r.jobs[jobID]
+	if !ok {
+		return nil, ErrImportJobNotFound
+	}
+	return cloneImportJob(j), nil
+}
+
 // --- session store / audit sink / test harness ---
 
 type memSessions struct {
@@ -690,6 +930,8 @@ func newTestEnv(t *testing.T) *testEnv {
 	srv.Tools = st.tools
 	srv.AuditQuery = st.auditLogs
 	srv.Policies = st.policies
+	srv.ImportJobs = st.importJobs
+	srv.Groups = st.groups
 	srv.KEK = testKEK
 	srv.Now = func() time.Time { return fixedNow }
 	return &testEnv{store: st, sessions: sess, audit: aud, srv: srv, handler: srv.Handler()}

@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"adc.dev/ce/internal/adminauth"
+	"adc.dev/ce/internal/alerts"
 	"adc.dev/ce/internal/httpx"
 )
 
@@ -37,11 +38,14 @@ const (
 	codeNotFound          = "10004"
 	codeConflict          = "10005"
 	codeInternal          = "10007"
+	codeBodyTooLarge      = "10008"
 	codeDeviceNotFound    = "11001"
 	codeDeviceFrozen      = "11003"
 	codeToolNotFound      = "11005"
 	codeDeviceCodeExists  = "11008"
 	codeDeviceQuota       = "11010"
+	codeGroupNotFound     = "11013"
+	codeGroupNameExists   = "11014"
 	codeTenantNotFound    = "13001"
 	codeTenantSuspended   = "13002"
 	codeTenantQuota       = "13003"
@@ -139,6 +143,17 @@ type Server struct {
 	// Tickets is the read-only approval ticket list for the console
 	// (design/33 3.1.15); nil fails the handler closed.
 	Tickets TicketsRepo
+	// AlertRules persists the FR-017 tenant alert rule set (design/82 B2,
+	// internal/alerts); AlertEvents serves the fired-alert history.
+	// nil fails the handlers closed.
+	AlertRules  alerts.RuleStore
+	AlertEvents alerts.EventReader
+	// ImportJobs persists batch device import job state (FR-011,
+	// design/82 B1.1); Groups persists device groups (FR-011,
+	// design/82 B1.3). Both are optional at construction: nil fails the
+	// corresponding handlers closed with 500 code 10007.
+	ImportJobs ImportJobRepo
+	Groups     GroupRepo
 	// ExportMaxRows caps the synchronous audit CSV export (FR-013
 	// BR-013-03); zero falls back to defaultExportMaxRows.
 	ExportMaxRows int
@@ -186,6 +201,19 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /v1/admin/devices/{deviceID}/tools", authz(admin(http.HandlerFunc(s.handleListDeviceTools))))
 	mux.Handle("PATCH /v1/admin/devices/{deviceID}/tools", authz(admin(http.HandlerFunc(s.handlePatchDeviceTools))))
 
+	// FR-011 batch onboarding (design/82 B1.1/B1.3): CSV import is a
+	// two-step async flow (POST create + GET poll); device groups are
+	// tenant-scoped CRUD. All admin-only. The poll path nests under
+	// /import/jobs/ because GET /devices/import/{jobID} would be
+	// ambiguous with GET /devices/{deviceID}/tools in ServeMux
+	// (literal vs wildcard at the same position).
+	mux.Handle("POST /v1/admin/devices/import", authz(admin(http.HandlerFunc(s.handleImportDevices))))
+	mux.Handle("GET /v1/admin/devices/import/jobs/{jobID}", authz(admin(http.HandlerFunc(s.handleImportStatus))))
+	mux.Handle("POST /v1/admin/device-groups", authz(admin(http.HandlerFunc(s.handleCreateGroup))))
+	mux.Handle("GET /v1/admin/device-groups", authz(admin(http.HandlerFunc(s.handleListGroups))))
+	mux.Handle("PATCH /v1/admin/device-groups/{groupID}", authz(admin(http.HandlerFunc(s.handlePatchGroup))))
+	mux.Handle("DELETE /v1/admin/device-groups/{groupID}", authz(admin(http.HandlerFunc(s.handleDeleteGroup))))
+
 	mux.Handle("GET /v1/admin/tenants/{tenantID}/approval-policy", authz(admin(http.HandlerFunc(s.handleGetApprovalPolicy))))
 	mux.Handle("PUT /v1/admin/tenants/{tenantID}/approval-policy", authz(admin(http.HandlerFunc(s.handlePutApprovalPolicy))))
 
@@ -202,6 +230,13 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /v1/admin/approval-tickets", authz(admin(http.HandlerFunc(s.handleTicketsList))))
 	mux.Handle("GET /v1/admin/audit-logs", authz(auditRead(http.HandlerFunc(s.handleAuditLogs))))
 	mux.Handle("POST /v1/admin/audit-logs/export", authz(auditRead(http.HandlerFunc(s.handleAuditExport))))
+
+	// FR-017 alert rules and fired-alert history (design/82 B2). The RBAC
+	// matrix (adminauth/rbac.go) covers admin-tier paths only, so both
+	// routes are admin-only until the matrix is widened for auditors.
+	mux.Handle("GET /v1/admin/alerts/rules", authz(admin(http.HandlerFunc(s.handleGetAlertRules))))
+	mux.Handle("PUT /v1/admin/alerts/rules", authz(admin(http.HandlerFunc(s.handlePutAlertRules))))
+	mux.Handle("GET /v1/admin/alerts/events", authz(admin(http.HandlerFunc(s.handleGetAlertEvents))))
 
 	// Trace id propagation guarantees an X-Trace-ID on every response,
 	// including unified error bodies (design/33 1.9).

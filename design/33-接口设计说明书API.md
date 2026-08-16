@@ -109,7 +109,7 @@ X-ADC-Signature: <hex(HMAC-SHA256(device_secret, 签名串))>
 | 分段 | 码段 | 示例 |
 |------|------|------|
 | 10xxx 通用 | 10001 参数校验失败（400）；10002 未认证或凭证无效（401）；10003 权限不足（403）；10004 资源不存在（404）；10005 资源冲突（409）；10006 请求过于频繁（429）；10007 服务内部错误（500）；10008 请求体过大（413）；10009 幂等键冲突（409）；10010 请求体非合法 JSON（400）；10011 不支持的媒体类型（415） | |
-| 11xxx 设备 | 11001 设备不存在（404）；11002 设备离线（503）；11003 设备已冻结（403）；11004 设备凭证无效或已吊销（401）；11005 工具不存在（404）；11006 工具已禁用（403）；11007 工具调用超时（504）；11008 设备码已存在（409）；11009 批量导入存在错误行（422）；11010 设备配额超限（403）；11011 设备签名校验失败（401）；11012 设备 nonce 重放（401） | |
+| 11xxx 设备 | 11001 设备不存在（404）；11002 设备离线（503）；11003 设备已冻结（403）；11004 设备凭证无效或已吊销（401）；11005 工具不存在（404）；11006 工具已禁用（403）；11007 工具调用超时（504）；11008 设备码已存在（409）；11009 批量导入存在错误行（422）；11010 设备配额超限（403）；11011 设备签名校验失败（401）；11012 设备 nonce 重放（401）；11013 设备分组不存在（404）；11014 设备分组名已存在（409） | |
 | 12xxx 审批 | 12001 工单不存在（404）；12002 工单已处理（409）；12003 工单已过期（403，实现为准）；12004 回调签名校验失败（401，签名缺失同 401）；12005 审批人无权处理（403）；12006 操作已被 HITL 审批拦截（403，即 BLOCKED_BY_HITL）；12007 审批流未配置（503）；12008 审批渠道推送失败（503） | |
 | 13xxx 租户 | 13001 租户不存在（404）；13002 租户已停用（403）；13003 租户配额超限（403）；13004 租户标识重复（409）；13005 角色不存在（404）；13006 组织成员不存在（404）；13007 越权访问其他租户资源（403） | |
 | 14xxx 审计 | 14001 审计查询条件非法（400）；14002 导出数量超限（422）；14003 导出任务不存在（404）；14004 审计日志不可修改（403） | |
@@ -192,7 +192,7 @@ online --执行失败率超阈值或告警--> error --恢复心跳--> online
 | 6 | POST | /v1/devices | 会话 + RBAC | 设备注册并签发凭证 | FR-010 | V1.0 |
 | 7 | GET | /v1/devices | 会话 + RBAC | 设备列表与筛选 | FR-010 | V1.0 |
 | 8 | PATCH | /v1/devices/{device_id} | 会话 + RBAC | 冻结/解冻、吊销、重置凭证 | FR-010 | V1.0 |
-| 9 | POST | /v1/devices/import | 会话 + RBAC | 批量 CSV 导入 | FR-011 | V1.5 预留 |
+| 9 | POST | /v1/devices/import | 会话 + RBAC | 批量 CSV 导入（异步任务） | FR-011 | V1.5（已实现） |
 | 10 | GET | /v1/devices/{device_id}/tools | 会话 + RBAC | 设备工具列表与风险等级 | FR-006 | V1.0 |
 | 11 | PATCH | /v1/devices/{device_id}/tools | 会话 + RBAC | 工具风险等级与启停配置 | FR-006 | V1.0 |
 | 12 | POST | /v1/agent-keys | 会话 + RBAC | 签发 Agent API Key | FR-009 | V1.0 |
@@ -211,8 +211,13 @@ online --执行失败率超阈值或告警--> error --恢复心跳--> online
 | 25 | GET | /healthz | 无 | 存活探针 | FR-017 | V1.0 |
 | 26 | GET | /readyz | 无 | 就绪探针（依赖检查） | FR-017 | V1.0 |
 | 27 | GET | /metrics | 无（内网） | Prometheus 指标 | FR-017 | V1.0 |
+| 28 | GET | /v1/devices/import/{task_id} | 会话 + RBAC | 批量导入任务进度与逐行结果查询 | FR-011 | V1.5（已实现） |
+| 29 | POST | /v1/device-groups | 会话 + RBAC | 创建设备分组 | FR-011 | V1.5（已实现） |
+| 30 | GET | /v1/device-groups | 会话 + RBAC | 设备分组列表 | FR-011 | V1.5（已实现） |
+| 31 | PATCH | /v1/device-groups/{group_id} | 会话 + RBAC | 更新分组名称/描述 | FR-011 | V1.5（已实现） |
+| 32 | DELETE | /v1/device-groups/{group_id} | 会话 + RBAC | 删除分组（设备自动脱组） | FR-011 | V1.5（已实现） |
 
-端点总数：27。V1.5 预留端点（不在 V1.0 交付）：A 类设备 MCP 绑定管理 `/v1/bindings` 系列（FR-021）；LLM 网关 `/v1/llm` 系列（FR-012）；计费账单 `/v1/billing` 系列（FR-016）；A2A 端点（FR-022，V2.0，见第 5 章）。
+端点总数：32。FR-011 批量纳管与分组的 6 个端点已随 V1.5 提前实现（实际挂载路径 `/v1/admin/...`，见 3.1 节各端点备注）；其余 V1.5 预留端点（不在 V1.0 交付）：A 类设备 MCP 绑定管理 `/v1/bindings` 系列（FR-021）；LLM 网关 `/v1/llm` 系列（FR-012）；计费账单 `/v1/billing` 系列（FR-016）；A2A 端点（FR-022，V2.0，见第 5 章）。
 
 端点分组与版本归属汇总（模块归属以 design/30 为准）：
 
@@ -475,25 +480,27 @@ online --执行失败率超阈值或告警--> error --恢复心跳--> online
 }
 ```
 
-- `op` 枚举：`freeze`（冻结，踢下线现有连接，新连接拒绝）、`unfreeze`（解冻）、`revoke_credential`（吊销凭证，设备须重新注册获发新凭证）、`reset_credential`（签发新凭证，旧凭证 24 小时过渡期后失效，FR-009 轮换思路复用）、`update_meta`（更新名称与 metadata）。`op=reset_credential` 时响应含 `credential`，其余 op 不含。
+- `op` 枚举：`freeze`（冻结，踢下线现有连接，新连接拒绝）、`unfreeze`（解冻）、`revoke_credential`（吊销凭证，设备须重新注册获发新凭证）、`reset_credential`（签发新凭证，旧凭证 24 小时过渡期后失效，FR-009 轮换思路复用）、`update_meta`（更新名称与 metadata）。`op=reset_credential` 时响应含 `credential`，其余 op 不含。`op=update_meta` 额外接受 `group_id`（FR-011 设备分组）：值为 UUID 时入组（分组须存在且属同一租户，否则 404 code 11013/403 code 13007），值为 `""` 时移组，字段缺省时不改分组。
 - 错误码：11001（设备不存在）、10001（op 非法或缺少 change_reason）、11003（冻结态设备不可再 reset）。
 - 备注：`change_reason` 必填并写入审计（FR-010 异常场景）；吊销/冻结生效即断开现有连接（FR-002 验收）。
 
-#### 3.1.9 POST /v1/devices/import（V1.5 预留，FR-011）
+#### 3.1.9 POST /v1/devices/import（V1.5，FR-011，已实现）
 
-- 模块：管理控制台 Admin API；用途：CSV 批量导入注册，异步任务。
-- 请求：`multipart/form-data`，字段 `file`（CSV，上限 1000 行）、`dry_run`（true/false）。CSV 列：`device_code,name,device_type,auth_type,group_ids`。
+- 模块：管理控制台 Admin API；用途：CSV 批量导入注册，异步任务。实际挂载路径 `/v1/admin/devices/import`（design/82 B1.1，其余管理端点同前缀）。
+- 请求：`multipart/form-data`，字段 `file`（CSV，上限 1000 行，超限 413 code 10008）、`dry_run`（true/false，仅校验不落库）。CSV 列：`device_code,name,device_type,auth_type` 必填，`group_ids` 可选（逗号分隔 UUID，取首个）。
 - 响应 202：
 
 ```json
 {
-  "task_id": "task_9d8c7b6a",
+  "task_id": "imp_0c3271864d03df1a",
   "status": "queued",
-  "status_url": "/v1/devices/import/{task_id}"
+  "status_url": "/v1/admin/devices/import/jobs/{task_id}"
 }
 ```
 
-- 备注：失败行给出逐行原因（details 数组复用 1.5 节错误结构）；重复设备码整行回滚；V1.0 不交付本端点，客户端不得依赖。
+- 任务进度：`GET /v1/admin/devices/import/jobs/{task_id}`（本端点 28 号，实际路径因与 `/v1/admin/devices/{device_id}/tools` 路由歧义而嵌套 `/jobs/`）。状态机 queued→running→done|failed；响应含 `total_rows/processed/success/failed/errors` 与逐行错误明细（`errors[].row/device_code/code/message`）。任务状态存 Valkey（key `adc:import_job:{task_id}`，TTL 24 小时），V1 未引入 PG 任务表（免迁移；后续凭证包批量下载落地时随 design/31 TaskStore seam 迁移到 PG）。任务不存在返回 404 code 10004。
+- 逐行错误码：10001（字段校验失败，如 device_code 非法/name 空/auth_type 非 token|hmac|mtls）、11008（设备码已存在，整行回滚——注册按行事务，插入与配额扣减同事务提交）、11010（设备配额超限）。FR-011 异常场景：重复设备码整行回滚；批量导入不返回设备凭证（NFR-004，凭证仅在签发响应出现一次；导入设备后续走 3.1.8 reset_credential 或 V1.5 凭证包批量下载）。
+- 备注：1.7 节 Idempotency-Key 约定对本端点暂未强制（实现为预留项，见 import.go 注释）；dry_run 不探测配额（无只读等价 seam），仅做字段与重复码校验。
 
 #### 3.1.10 GET /v1/devices/{device_id}/tools
 
@@ -748,6 +755,34 @@ online --执行失败率超阈值或告警--> error --恢复心跳--> online
 
 - 角色枚举：`platform_admin`（平台管理员）、`tenant_admin`（租户管理员）、`approver`（审批人）、`auditor`（只读审计员）。菜单级权限裁剪由控制台按角色实现（FR-014）。
 - 备注：V1.0 用户由租户管理员创建，SSO/OIDC 对接在阶段 3（doc/05）；审批人绑定企微/钉钉工号字段 `im_identity` 为审批渠道必需（SEC-01 真实身份回传）。
+
+#### 3.1.19 POST/GET/PATCH/DELETE /v1/device-groups（V1.5，FR-011，已实现）
+
+- 模块：管理控制台 Admin API；用途：设备分组 CRUD（design/82 B1.3），分组可用于设备列表筛选（3.1.7 `group_id`），审批策略作用域随 FR-007 扩展。实际挂载路径 `/v1/admin/device-groups`。
+- 创建 POST 请求：
+
+```json
+{ "name": "产线A", "description": "A1 车间", "parent_id": null }
+```
+
+- 创建响应 201：
+
+```json
+{
+  "group_id": "00000000-0000-4000-8000-000003000001",
+  "name": "产线A",
+  "description": "A1 车间",
+  "parent_id": null,
+  "created_at": "2026-08-14T08:00:00Z",
+  "updated_at": "2026-08-14T08:00:00Z"
+}
+```
+
+- `parent_id` 可选（树形结构，design/32 3.4）：非 UUID 返回 400；分组不存在返回 404 code 11013；跨租户返回 403 code 13007。
+- GET 列表：offset 分页（1.6 节约定），`items/total/page/page_size`。
+- PATCH 请求：`{ "name": "...", "description": "..." }`，至少一个字段；name 空或超 255 返回 400；同租户重名返回 409 code 11014（uq_groups_tenant_name 部分唯一索引）。
+- DELETE 响应 204：软删除并同事务将组内设备 `group_id` 置 NULL（设备不删除，design/32 3.4 注释）；重复删除 404 code 11013。
+- 设备入组/移组：走 3.1.8 `PATCH /v1/devices/{device_id}`，`op=update_meta` + `group_id` 字段（见 3.1.8 备注）。所有变更写审计（`group.create/update/delete`）。
 
 ### 3.2 Agent API
 
@@ -1100,7 +1135,7 @@ JSON-RPC 错误响应（协议层错误）：
 
 ### 5.1 V1.0 端点冻结与演进规则
 
-- V1.0 端点集即第 2 章 27 项；任何破坏性变更升主版本（1.8 节），本版承诺：新增字段一律可选；`name` 聚合命名（`device_code__tool_name`）永久兼容，结构化 `device_code/tool_name` 字段为推荐新用法（SEC-24）。
+- V1.0 端点集即第 2 章 1-27 项（FR-011 六端点已实现，见 28-32）；任何破坏性变更升主版本（1.8 节），本版承诺：新增字段一律可选；`name` 聚合命名（`device_code__tool_name`）永久兼容，结构化 `device_code/tool_name` 字段为推荐新用法（SEC-24）。
 - Agent API V1.5 升级为标准 MCP Streamable HTTP（ADR-03/SEC-23）：增加 `initialize` 握手与能力协商，路径保持 `/v1/agent/mcp/*` 不变，响应结构按 MCP 规范对齐（`tools/list`、`tools/call` 已与 MCP 契约同构，迁移成本受控）；届时 `/v1/agent/mcp/tools/call/{request_id}` 查询端点由 MCP 通知机制渐进替代，保留至 V2.0。
 - 设备隧道 V1.5 起降级为 Legacy Bridge（ADR-15），仅服务 B 类设备；通道契约冻结（JSON-RPC 2.0 + 1.3 节 HMAC），SDK wire 协议随 core-sdk 版本化发布，发布即长期承诺（doc/05 阶段 4 风险）。
 
@@ -1111,7 +1146,8 @@ JSON-RPC 错误响应（协议层错误）：
 | POST /v1/bindings、GET /v1/bindings/{binding_id}、DELETE /v1/bindings/{binding_id} | A 类原生 MCP 设备 OAuth 2.1 客户端凭证鉴权绑定、绑定令牌签发与吊销 | FR-021 | 绑定令牌默认 24 小时有效期、轮换失败自动吊销；绑定成功前平台拒绝接入（ADR-15） |
 | GET /v1/llm/models、POST /v1/llm/chat/completions、GET /v1/llm/usage | LLM 网关统一代理、计量 | FR-012 | 主备故障转移 5 秒内切换（FR-012 验收）；token 计量归集租户账单 |
 | GET /v1/billing/statements | 账单查询与对账 | FR-016 | 三类计量：设备数、调用量、Token 量 |
-| GET /v1/device-groups、POST /v1/device-groups | 设备分组（产线/车间） | FR-011 | 分组用于工具查询、审批策略作用域 |
+
+设备分组端点（`/v1/device-groups` 系列，FR-011）已随 V1.5 提前实现并移至第 2 章端点 29-32，本节不再列为预留。
 
 ### 5.3 V1.5 预留（A2A，FR-022，方案 A 决策由 V2.0 前移）
 

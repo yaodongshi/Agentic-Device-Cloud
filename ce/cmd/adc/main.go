@@ -30,6 +30,7 @@ import (
 	"adc.dev/ce/internal/agentapi"
 	"adc.dev/ce/internal/agentapi/route"
 	"adc.dev/ce/internal/agentauth"
+	"adc.dev/ce/internal/alerts"
 	"adc.dev/ce/internal/approval"
 	"adc.dev/ce/internal/auth"
 	"adc.dev/ce/internal/config"
@@ -237,8 +238,46 @@ func main() {
 	adminSrv.Policies = adminapi.NewPGPolicyRepo(pool.Pool)
 	adminSrv.AuditQuery = adminapi.NewPGAuditQueryRepo(pool.Pool)
 	adminSrv.Tickets = adminapi.NewPGTicketsRepo(pool.Pool)
+	// FR-011 batch onboarding (design/82 B1): import job state lives in
+	// Valkey (24h TTL, no schema migration), device groups in PG.
+	adminSrv.ImportJobs = adminapi.NewValkeyImportJobRepo(rdb)
+	adminSrv.Groups = adminapi.NewPGGroupRepo(pool.Pool)
 	adminSrv.Audit = &adminAuditSink{inner: audit.NewValkeySink(rdb)}
 	adminHandler := adminSrv.Handler()
+
+	// --- alerting (FR-017, design/82 B2) ---
+	// Rules persist in adc_tenants.metadata (alerts.PGRuleStore); the
+	// evaluator self-scrapes the local /metrics exposition every 30s and
+	// fires through the webhook notifier chain with Valkey-backed 5-minute
+	// dedup. The five seed Prometheus rules (deploy/prometheus/
+	// alert-rules.yml) remain the production cluster path.
+	alertRules := alerts.NewPGRuleStore(pool.Pool)
+	alertEvents := alerts.NewEventBuffer(alerts.DefaultEventCapacity)
+	adminSrv.AlertRules = alertRules
+	adminSrv.AlertEvents = alertEvents
+	var alertChannels []alerts.AlertNotifier
+	if cfg.WeComWebhookURL != "" {
+		alertChannels = append(alertChannels, alerts.NewWebhookNotifier(cfg.WeComWebhookURL))
+	}
+	if cfg.DingTalkWebhook != "" {
+		alertChannels = append(alertChannels, alerts.NewWebhookNotifier(cfg.DingTalkWebhook))
+	}
+	var alertNotifier alerts.AlertNotifier
+	if len(alertChannels) > 0 {
+		alertNotifier = alerts.NewRetryAlertNotifier(alerts.NewMultiAlertNotifier(alertChannels...))
+	} else {
+		// FR-017 email channel placeholder: alerts are logged until a
+		// real channel (webhook or SMTP) is configured.
+		alertNotifier = &alerts.EmailNotifier{Log: log}
+	}
+	alertEval := &alerts.Evaluator{
+		Store:  alertRules,
+		Reader: alerts.NewHTTPReader(metricsBaseURL(cfg) + "/metrics"),
+		Notify: alertNotifier,
+		Dedup:  alerts.NewValkeyDeduper(rdb),
+		Events: alertEvents,
+		Log:    log,
+	}
 
 	// --- agent api quota + rate limit wiring (design/80 B-10, SEC-12) ---
 	// The Agent API routes get a sub-mux so the quota gate and rate
@@ -339,6 +378,9 @@ func main() {
 	// connector/registry.go, design/31 3.1.7).
 	go collectPGPool(ctx, pool, obs)
 	go collectDeviceOnline(ctx, rdb, tenantID, obs)
+	// FR-017 alert evaluator (design/82 B2): first sweep fires one interval
+	// after startup, once the HTTP server and the collectors are running.
+	go alertEval.Run(ctx)
 
 	go func() {
 		log.Info("adc dev server listening", "addr", cfg.HTTPAddr, "tls", cfg.TLSEnable)
@@ -427,6 +469,23 @@ func loadNodeKey(cfg *config.Config) ([]byte, error) {
 		return nil, fmt.Errorf("ADC_NODE_KEY must be at least 16 bytes (SEC-06)")
 	}
 	return key, nil
+}
+
+// metricsBaseURL renders the local /metrics base URL for the alert
+// evaluator self-scrape (design/82 B2). A bare ":port" listen address is
+// rewritten to 127.0.0.1; TLSEnable switches the scheme (SEC-05). The
+// evaluator scrapes the internal port of its own process, the same data
+// the console dashboard reads through the gateway.
+func metricsBaseURL(cfg *config.Config) string {
+	host := cfg.HTTPAddr
+	if strings.HasPrefix(host, ":") {
+		host = "127.0.0.1" + host
+	}
+	scheme := "http"
+	if cfg.TLSEnable {
+		scheme = "https"
+	}
+	return scheme + "://" + host
 }
 
 // quotaLookup reads the authoritative quota ledger row for the tenant

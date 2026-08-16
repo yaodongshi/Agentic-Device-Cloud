@@ -17,7 +17,11 @@ export class ApiError extends Error {
 export async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const token = localStorage.getItem('adc_token')
   const headers = new Headers(init.headers)
-  if (!headers.has('Content-Type') && init.body) headers.set('Content-Type', 'application/json')
+  // JSON bodies get the Content-Type header; FormData/Blob bodies must let
+  // fetch set the multipart boundary itself.
+  if (!headers.has('Content-Type') && typeof init.body === 'string') {
+    headers.set('Content-Type', 'application/json')
+  }
   if (token) headers.set('Authorization', `Bearer ${token}`)
 
   // Platform admins must scope admin endpoints to a tenant explicitly
@@ -69,7 +73,11 @@ export const api = {
   get: <T>(path: string, params?: Record<string, unknown>) => request<T>(withQuery(path, params)),
   post: <T>(path: string, data?: unknown) => request<T>(path, { method: 'POST', body: JSON.stringify(data) }),
   patch: <T>(path: string, data?: unknown) => request<T>(path, { method: 'PATCH', body: JSON.stringify(data) }),
+  put: <T>(path: string, data?: unknown) => request<T>(path, { method: 'PUT', body: JSON.stringify(data) }),
   delete: <T>(path: string) => request<T>(path, { method: 'DELETE' }),
+  // Multipart upload (FR-011 device CSV import): same auth/error semantics;
+  // fetch sets the Content-Type boundary for FormData bodies.
+  upload: <T>(path: string, form: FormData) => request<T>(path, { method: 'POST', body: form }),
 }
 
 // File export (audit CSV/JSON): same auth/error semantics as request() but

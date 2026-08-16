@@ -7,6 +7,9 @@
       >
         {{ t('devices.register') }}
       </el-button>
+      <el-button @click="openImport">
+        {{ t('devices.importDevices') }}
+      </el-button>
       <div class="filters">
         <el-input
           v-model="filters.keyword"
@@ -26,6 +29,19 @@
             :key="key"
             :label="label"
             :value="key"
+          />
+        </el-select>
+        <el-select
+          v-model="filters.groupId"
+          class="filter-item"
+          :placeholder="t('devices.groupPlaceholder')"
+          clearable
+        >
+          <el-option
+            v-for="g in groupOptions"
+            :key="g.group_id"
+            :label="g.name"
+            :value="g.group_id"
           />
         </el-select>
         <el-select
@@ -318,6 +334,119 @@
       </template>
     </el-dialog>
 
+    <!-- Batch import dialog (FR-011): template -> upload -> async poll -> result -->
+    <el-dialog
+      v-model="importVisible"
+      :title="t('devices.importTitle')"
+      width="640px"
+      :close-on-click-modal="false"
+      @closed="resetImport"
+    >
+      <template v-if="!importJob">
+        <el-alert
+          type="info"
+          :title="t('devices.importTemplateHint')"
+          :closable="false"
+          show-icon
+        />
+        <div class="import-actions">
+          <el-button @click="downloadImportTemplate">
+            {{ t('devices.importTemplate') }}
+          </el-button>
+          <el-upload
+            drag
+            :auto-upload="false"
+            :limit="1"
+            accept=".csv"
+            :on-change="onImportFileChange"
+            :on-exceed="onImportExceed"
+          >
+            <div class="import-drop">
+              <div>
+                {{ t('devices.importSelectHint') }}
+              </div>
+              <div class="muted">
+                {{ t('devices.importFileTypeHint') }}
+              </div>
+            </div>
+          </el-upload>
+        </div>
+      </template>
+      <template v-else>
+        <div class="import-progress">
+          <el-tag
+            :type="importTagType(importJob.status)"
+            effect="light"
+          >
+            {{ t(`devices.importStatuses.${importJob.status}`) }}
+          </el-tag>
+          <el-progress
+            v-if="importJob.status === 'queued' || importJob.status === 'running'"
+            :percentage="importPercent"
+            :stroke-width="14"
+          />
+          <div
+            v-if="importJob.status === 'done' || importJob.status === 'failed'"
+            class="import-result"
+          >
+            <el-alert
+              :type="importJob.failed > 0 || importJob.status === 'failed' ? 'warning' : 'success'"
+              :title="importResultTitle"
+              :closable="false"
+              show-icon
+            />
+            <el-table
+              v-if="importJob.errors.length > 0"
+              :data="importJob.errors"
+              size="small"
+              max-height="260"
+            >
+              <el-table-column
+                prop="row"
+                :label="t('devices.importRow')"
+                width="70"
+              />
+              <el-table-column
+                prop="device_code"
+                :label="t('devices.deviceCode')"
+                min-width="140"
+              />
+              <el-table-column
+                prop="code"
+                :label="t('devices.importErrorCode')"
+                width="90"
+              />
+              <el-table-column
+                prop="message"
+                :label="t('devices.importErrorMsg')"
+                min-width="220"
+              />
+            </el-table>
+          </div>
+        </div>
+      </template>
+      <template #footer>
+        <el-button @click="importVisible = false">
+          {{ importJob ? t('common.close') : t('common.cancel') }}
+        </el-button>
+        <el-button
+          v-if="!importJob"
+          type="primary"
+          :loading="importSubmitting"
+          @click="submitImport"
+        >
+          {{ t('devices.importSubmit') }}
+        </el-button>
+        <el-button
+          v-else-if="importJob.status === 'done' || importJob.status === 'failed'"
+          type="primary"
+          @click="resetImport"
+        >
+          {{ t('devices.importDevices') }}
+        </el-button>
+      </template>
+    </el-dialog>
+
     <!-- One-time credential dialog (register / reset credential) -->
     <el-dialog
       v-model="credentialVisible"
@@ -362,10 +491,10 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, onUnmounted, reactive, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { ElMessage } from 'element-plus'
-import type { FormInstance, FormRules } from 'element-plus'
+import type { FormInstance, FormRules, UploadFile, UploadFiles } from 'element-plus'
 import { api } from '@/api/request'
 import { errorMessage } from '@/api/errors'
 import { copyText } from '@/utils/clipboard'
@@ -374,9 +503,13 @@ import { DOCS_URL } from '@/utils/links'
 import type {
   Device,
   DeviceAuthType,
+  DeviceGroup,
   DevicePatchOp,
   DevicePatchResponse,
   DeviceStatus,
+  ImportAcceptedResponse,
+  ImportJob,
+  ImportJobStatus,
   Page,
   RegisteredDevice,
 } from '@/api/types'
@@ -393,9 +526,9 @@ const total = ref(0)
 const page = ref(1)
 const pageSize = ref(20)
 
-const filters = reactive({ keyword: '', status: '', deviceType: '' })
+const filters = reactive({ keyword: '', status: '', deviceType: '', groupId: '' })
 
-const hasFilters = computed(() => Boolean(filters.keyword || filters.status || filters.deviceType))
+const hasFilters = computed(() => Boolean(filters.keyword || filters.status || filters.deviceType || filters.groupId))
 
 // GET /v1/admin/devices with filters and offset pagination (design/33 3.1.7).
 async function fetchList() {
@@ -407,6 +540,7 @@ async function fetchList() {
       status: filters.status || undefined,
       device_type: filters.deviceType || undefined,
       keyword: filters.keyword || undefined,
+      group_id: filters.groupId || undefined,
     })
     list.value = res.items ?? []
     total.value = res.total ?? 0
@@ -426,7 +560,21 @@ function reset() {
   filters.keyword = ''
   filters.status = ''
   filters.deviceType = ''
+  filters.groupId = ''
   search()
+}
+
+// Device group filter (FR-011, design/33 3.1.19): groups are loaded once
+// per page visit; the list endpoint filters by group_id (design/33 3.1.7).
+const groupOptions = ref<DeviceGroup[]>([])
+
+async function fetchGroups() {
+  try {
+    const res = await api.get<Page<DeviceGroup>>('/v1/admin/device-groups', { page: 1, page_size: 200 })
+    groupOptions.value = res.items ?? []
+  } catch (err) {
+    ElMessage.error(errorMessage(err, t))
+  }
 }
 
 function onSizeChange() {
@@ -555,7 +703,136 @@ async function copyCredential() {
   if (ok) credentialAcked.value = true
 }
 
-onMounted(fetchList)
+// --- Batch import (FR-011): upload -> poll /v1/admin/devices/import/jobs/{id} ---
+const importVisible = ref(false)
+const importSubmitting = ref(false)
+const importFile = ref<File | null>(null)
+const importJob = ref<ImportJob | null>(null)
+const importPollTimer = ref<number | null>(null)
+
+const importPercent = computed(() => {
+  const job = importJob.value
+  if (!job || job.total_rows === 0) return 0
+  return Math.min(100, Math.round((job.processed / job.total_rows) * 100))
+})
+
+const importResultTitle = computed(() => {
+  const job = importJob.value
+  if (!job) return ''
+  if (job.status === 'failed') {
+    return job.error_msg || t('devices.importFailedTitle')
+  }
+  if (job.failed === 0) return t('devices.importNoErrors')
+  return t('devices.importSummary', { total: job.total_rows, success: job.success, failed: job.failed })
+})
+
+function importTagType(status: ImportJobStatus): 'info' | 'primary' | 'success' | 'danger' | 'warning' {
+  switch (status) {
+    case 'done': return 'success'
+    case 'failed': return 'danger'
+    case 'running': return 'primary'
+    default: return 'info'
+  }
+}
+
+function openImport() {
+  importFile.value = null
+  importJob.value = null
+  importVisible.value = true
+}
+
+function resetImport() {
+  stopImportPolling()
+  importFile.value = null
+  importJob.value = null
+  importSubmitting.value = false
+}
+
+function onImportFileChange(file: UploadFile) {
+  importFile.value = file.raw ?? null
+}
+
+function onImportExceed(files: UploadFiles) {
+  // Replace the previous selection with the newest file.
+  importFile.value = files[files.length - 1]?.raw ?? null
+}
+
+// Client-side CSV template: BOM prefix so Excel opens the Chinese sample
+// row correctly; columns mirror design/33 3.1.9 (group_ids optional).
+function downloadImportTemplate() {
+  const content =
+    '\uFEFFdevice_code,name,device_type,auth_type,group_ids\n' +
+    'cnc-lathe-01,一号车床,cnc,token,\n'
+  const blob = new Blob([content], { type: 'text/csv;charset=utf-8' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = 'devices_import_template.csv'
+  a.click()
+  URL.revokeObjectURL(url)
+}
+
+async function submitImport() {
+  if (!importFile.value) {
+    ElMessage.warning(t('devices.importNeedFile'))
+    return
+  }
+  importSubmitting.value = true
+  try {
+    const form = new FormData()
+    form.append('file', importFile.value)
+    const acc = await api.upload<ImportAcceptedResponse>('/v1/admin/devices/import', form)
+    ElMessage.success(t('devices.importSubmitted'))
+    importJob.value = {
+      task_id: acc.task_id,
+      status: acc.status,
+      dry_run: false,
+      total_rows: 0,
+      processed: 0,
+      success: 0,
+      failed: 0,
+      errors: [],
+      created_at: '',
+      started_at: '',
+    }
+    startImportPolling(acc.task_id)
+  } catch (err) {
+    ElMessage.error(errorMessage(err, t))
+  } finally {
+    importSubmitting.value = false
+  }
+}
+
+function startImportPolling(taskId: string) {
+  stopImportPolling()
+  importPollTimer.value = window.setInterval(async () => {
+    try {
+      const job = await api.get<ImportJob>(`/v1/admin/devices/import/jobs/${taskId}`)
+      importJob.value = job
+      if (job.status === 'done' || job.status === 'failed') {
+        stopImportPolling()
+        await fetchList()
+      }
+    } catch (err) {
+      stopImportPolling()
+      ElMessage.error(errorMessage(err, t))
+    }
+  }, 1500)
+}
+
+function stopImportPolling() {
+  if (importPollTimer.value !== null) {
+    window.clearInterval(importPollTimer.value)
+    importPollTimer.value = null
+  }
+}
+
+onMounted(() => {
+  fetchGroups()
+  fetchList()
+})
+
+onUnmounted(stopImportPolling)
 </script>
 
 <style scoped>
@@ -570,4 +847,8 @@ onMounted(fetchList)
 .credential-box .el-input { flex: 1; }
 .muted { color: var(--adc-text-secondary); }
 .empty-actions { display: flex; justify-content: center; gap: var(--adc-space-2); }
+.import-actions { display: flex; flex-direction: column; gap: var(--adc-space-3); margin-top: var(--adc-space-3); }
+.import-drop { padding: var(--adc-space-2); }
+.import-progress { display: flex; flex-direction: column; gap: var(--adc-space-3); }
+.import-result { display: flex; flex-direction: column; gap: var(--adc-space-3); }
 </style>
