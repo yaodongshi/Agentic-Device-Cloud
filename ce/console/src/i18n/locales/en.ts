@@ -36,6 +36,7 @@ export default {
     tenants: 'Tenants & Quota',
     orgUsers: 'Members & Roles',
     monitor: 'Monitoring',
+    ops: 'Operations',
   },
   login: {
     title: 'Sign in to ADC',
@@ -422,6 +423,11 @@ export default {
       blocked: 'Blocked',
       other: 'Other',
     },
+  },
+  ops: {
+    noUrl: 'No Grafana dashboard URL configured',
+    guideTitle: 'Enable the observability profile',
+    guideDesc: 'The operations dashboard is served by Grafana. Enable the observability profile at deploy time and inject VITE_GRAFANA_EMBED_URL (the Grafana dashboard URL, port 19300 by default) when building the image; this page embeds it in an iframe.',
   },
   errors: {
     '10001': 'Invalid parameters',

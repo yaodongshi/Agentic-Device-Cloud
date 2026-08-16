@@ -16,8 +16,10 @@ import (
 // operation atomic on the Valkey node, so any number of application
 // nodes can share one bucket without racing each other (a GET-then-SET
 // pair would lose updates between concurrent callers). The current time
-// is passed by the caller in ARGV[3], which requires the application
-// nodes to have NTP-synchronized clocks.
+// is passed by the caller in ARGV[3] as integer unix milliseconds, which
+// requires the application nodes to have NTP-synchronized clocks. Any
+// pre-millisecond :ts value (unix seconds) from an older build refills
+// the bucket to burst once; the key TTL (seconds) makes that transient.
 //
 // An INCR+EXPIRE fixed window (INCR on first hit, EXPIRE the key, deny
 // when the counter exceeds the quota) was considered as a degraded
@@ -34,7 +36,7 @@ import (
 //
 // ARGV[1]  refill rate, tokens per second
 // ARGV[2]  burst capacity
-// ARGV[3]  current time, unix seconds (float, caller clock)
+// ARGV[3]  current time, unix milliseconds (integer, caller clock)
 // ARGV[4]  requested tokens (always 1)
 // Returns  {allowed, tokens_remaining, retry_after_seconds}
 const tokenBucketScript = `
@@ -48,7 +50,7 @@ if tokens == nil then tokens = burst end
 if last == nil then last = now end
 local delta = now - last
 if delta < 0 then delta = 0 end
-tokens = math.min(burst, tokens + delta * rate)
+tokens = math.min(burst, tokens + delta * rate / 1000)
 local allowed = 0
 local retry = 0
 if tokens >= requested then
@@ -153,9 +155,14 @@ func (l *TokenBucketLimiter) AllowInfo(ctx context.Context, scope Scope, key str
 		return false, QuotaInfo{}, errors.New("ratelimit: refusing to limit an empty key (would share one bucket across all callers)")
 	}
 	now := l.now()
+	// Clock as integer unix milliseconds: values below 2^53 are exactly
+	// representable in the float64 the eval contract uses, so sub-millisecond
+	// refills cannot flip at bucket boundaries (the previous unix-nanosecond
+	// conversion lost precision above 2^53 and made exact-boundary tests
+	// flaky under -race).
 	raw, err := l.store.Eval(ctx, tokenBucketScript,
 		[]string{l.keyPrefix + string(scope) + ":" + key},
-		limit.Rate, limit.Burst, float64(now.UnixNano())/1e9, int64(1))
+		limit.Rate, limit.Burst, float64(now.UnixMilli()), int64(1))
 	if err != nil {
 		return false, QuotaInfo{}, fmt.Errorf("ratelimit: eval: %w", err)
 	}

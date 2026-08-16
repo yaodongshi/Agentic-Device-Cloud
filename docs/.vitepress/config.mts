@@ -2,6 +2,12 @@ import { defineConfig } from 'vitepress'
 
 const github = 'https://github.com/yaodongshi/Agentic-Device-Cloud'
 
+// A3.2: base path for GitHub Pages. Local builds default to '/'; the docs
+// workflow passes VITEPRESS_BASE (configure-pages base_path, e.g. '/<repo>')
+// so the site works under project pages. Nav/sidebar links starting with
+// '/' are rewritten with this base automatically by the VitePress theme.
+const base = process.env.VITEPRESS_BASE ?? '/'
+
 const enNav = [
   { text: 'Home', link: '/en/' },
   { text: 'Quick Start', link: '/en/quickstart' },
@@ -70,6 +76,7 @@ const zhSidebar = [
 export default defineConfig({
   title: 'ADC Docs',
   description: 'Agentic Device Cloud (ADC) documentation: AI-native device orchestration and governance platform',
+  base,
   locales: {
     root: {
       label: 'English',

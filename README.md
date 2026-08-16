@@ -9,6 +9,10 @@
   <img src="https://img.shields.io/badge/Go-1.26-00ADD8" alt="Go">
   <img src="https://img.shields.io/badge/Python-3.14-3776AB" alt="Python">
   <img src="https://img.shields.io/badge/status-Early%20Development-orange" alt="Status">
+  <!-- A3.3 OpenSSF Scorecard badge (placeholder; uncomment once the repo is
+       public and scorecard.yml has published results):
+  <a href="https://scorecard.dev/viewer/?uri=github.com/yaodongshi/Agentic-Device-Cloud"><img src="https://api.scorecard.dev/projects/github.com/yaodongshi/Agentic-Device-Cloud/badge" alt="OpenSSF Scorecard"></a>
+  -->
 </p>
 
 > 中文简介见文末 [项目简介（中文）](#项目简介中文)。发起公司：广州众谛信息科技有限公司（Zodioo），见 [Company](#company)。

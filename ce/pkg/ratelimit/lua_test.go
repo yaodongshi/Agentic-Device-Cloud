@@ -22,11 +22,11 @@ func TestTokenBucketScriptShape(t *testing.T) {
 		"local burst = tonumber(ARGV[2])", // capacity
 		"local now = tonumber(ARGV[3])",   // caller clock
 		"local requested = tonumber(ARGV[4])",
-		"redis.call('GET', KEYS[1])",             // reads the token balance
-		"KEYS[1] .. ':ts'",                       // separate timestamp key
-		"math.min(burst, tokens + delta * rate)", // capped smooth refill
-		"'EX', ttl",                              // keys expire when idle
-		"return {allowed, tokens, retry}",        // 3-element return contract
+		"redis.call('GET', KEYS[1])",                    // reads the token balance
+		"KEYS[1] .. ':ts'",                              // separate timestamp key
+		"math.min(burst, tokens + delta * rate / 1000)", // capped smooth refill (ms clock)
+		"'EX', ttl",                       // keys expire when idle
+		"return {allowed, tokens, retry}", // 3-element return contract
 	}
 
 	for _, want := range required {

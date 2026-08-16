@@ -1,9 +1,19 @@
 import { expect, test } from '@playwright/test'
+import type { Page } from '@playwright/test'
 import { devicesPage, loginResponse } from './fixtures'
 
 // Login page + session flow (design/20 4.2): rendering, client-side
 // validation and the happy-path login are covered. The backend is mocked
 // with page.route so the suite is self-contained.
+// The dashboard is the post-login landing page (f2cce63), so the happy
+// paths assert /dashboard and mock the dashboard's three list endpoints.
+function mockDashboardRoutes(page: Page) {
+  const emptyPage = { items: [], total: 0, page: 1, page_size: 20 }
+  void page.route('**/v1/admin/devices**', (route) => route.fulfill({ json: devicesPage }))
+  void page.route('**/v1/admin/approval-tickets**', (route) => route.fulfill({ json: emptyPage }))
+  void page.route('**/v1/admin/audit-logs**', (route) => route.fulfill({ json: emptyPage }))
+}
+
 test.describe('auth', () => {
   test('login page renders title, form and submit button', async ({ page }) => {
     await page.goto('/login')
@@ -40,22 +50,22 @@ test.describe('auth', () => {
     expect(await page.evaluate(() => localStorage.getItem('adc_token'))).toBeNull()
   })
 
-  test('successful login stores the session and redirects to /devices', async ({ page }) => {
+  test('successful login stores the session and redirects to /dashboard', async ({ page }) => {
     await page.route('**/v1/admin/auth/login', (route) => route.fulfill({ json: loginResponse }))
-    // The devices view fires its list request right after the redirect.
-    await page.route('**/v1/admin/devices**', (route) => route.fulfill({ json: devicesPage }))
+    // The dashboard fires its list requests right after the redirect.
+    mockDashboardRoutes(page)
     await page.goto('/login')
     await page.locator('input[autocomplete="username"]').fill('admin')
     await page.locator('input[autocomplete="current-password"]').fill('secret')
     await page.getByRole('button', { name: '登录' }).click()
-    await expect(page).toHaveURL(/\/devices/)
+    await expect(page).toHaveURL(/\/dashboard/)
     const token = await page.evaluate(() => localStorage.getItem('adc_token'))
     expect(token).toBe(loginResponse.token)
     const user = await page.evaluate(() => JSON.parse(localStorage.getItem('adc_user') ?? 'null'))
     expect(user).toMatchObject({ userId: 'u-admin-1', role: 'platform_admin' })
   })
 
-  test('authenticated user visiting /login is bounced to /devices', async ({ page }) => {
+  test('authenticated user visiting /login is bounced to /dashboard', async ({ page }) => {
     await page.addInitScript((init: { token: string; user: string }) => {
       localStorage.setItem('adc_token', init.token)
       localStorage.setItem('adc_user', init.user)
@@ -68,8 +78,8 @@ test.describe('auth', () => {
         role: 'platform_admin',
       }),
     })
-    await page.route('**/v1/admin/devices**', (route) => route.fulfill({ json: devicesPage }))
+    mockDashboardRoutes(page)
     await page.goto('/login')
-    await expect(page).toHaveURL(/\/devices/)
+    await expect(page).toHaveURL(/\/dashboard/)
   })
 })

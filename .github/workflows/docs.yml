@@ -1,0 +1,70 @@
+name: docs
+
+# A3.2: publish the VitePress docs site (docs/) to GitHub Pages.
+# Trigger: pushes touching docs/ on dev (plus manual runs). Build artifacts
+# are produced by docs:build and deployed via the official Pages pipeline.
+# The base path is resolved by configure-pages and passed to the build as
+# VITEPRESS_BASE so the site works under /<repo>/ and custom domains alike
+# (docs/.vitepress/config.mts reads the variable, defaulting to '/').
+
+on:
+  push:
+    branches: [dev]
+    paths:
+      - 'docs/**'
+      - '.github/workflows/docs.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: build docs site
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: docs/package-lock.json
+
+      - uses: actions/configure-pages@v5
+        id: pages
+
+      - name: Install dependencies
+        working-directory: docs
+        run: npm ci
+
+      - name: Build
+        working-directory: docs
+        env:
+          # '' for the root deployment, '/<repo>' for project pages; the
+          # VitePress config falls back to '/' when unset.
+          VITEPRESS_BASE: ${{ steps.pages.outputs.base_path }}
+        run: npm run docs:build
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: docs/.vitepress/dist
+
+  deploy:
+    name: deploy to GitHub Pages
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    permissions:
+      pages: write
+      id-token: write
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

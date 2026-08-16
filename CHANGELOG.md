@@ -13,6 +13,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+## [0.2.0] - 2026-08-15
+
+### Added
+- Console dashboard landing page (KPI cards, recent audit, first-login guide)
+- Demo dataset (2 devices, 3 tools, API key, audit samples, pending ticket) + tenant-scoped demo accounts
+- GET /v1/admin/approval-tickets endpoint; frontend auto tenant scoping
+- /metrics through the unified entry; gateway Valkey token-bucket rate limiter live
+- Ops monitor page (Grafana embed, platform_admin), GitHub Pages docs workflow, OpenSSF Scorecard workflow
+- Pilot operations docs (deployment guide, weekly report template, onboarding SOP, notification checklist)
+- Full-detail breakdown plan (design/82)
+
+### Fixed
+- Contract drift: low-risk call envelope, callback error-code ladder, cross-tenant 403
+- ratelimit float64 clock precision bug (500ms boundary false rejection)
+- Valkey ACL username wiring (audit/metering/wake bus WRONGPASS)
+- FROZEN status case mismatch, JSONB null marshaling
+
+### Changed
+- Coverage gate enabled in CI (75.3% >= 70%); 10-round -race stability verified
+
 ## [0.1.0] - 2026-08-15
 
 ### Added

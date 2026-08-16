@@ -23,7 +23,7 @@ type MemStore struct {
 
 type memBucket struct {
 	tokens float64
-	last   float64 // unix seconds, caller clock
+	last   float64 // unix milliseconds, caller clock
 }
 
 // NewMemStore returns an empty in-memory store.
@@ -81,7 +81,9 @@ func (s *MemStore) Eval(ctx context.Context, script string, keys []string, args 
 	if delta < 0 {
 		delta = 0 // clock skew guard, mirrors the Lua script
 	}
-	b.tokens = math.Min(burst, b.tokens+delta*rate)
+	// now/last are integer unix milliseconds (exact in float64), so
+	// boundary refills are deterministic.
+	b.tokens = math.Min(burst, b.tokens+delta*rate/1000)
 	b.last = now
 
 	allowed := 0.0

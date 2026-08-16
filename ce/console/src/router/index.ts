@@ -16,6 +16,7 @@ const moduleRoles: Record<string, Role[]> = {
   apiKeys: ['platform_admin', 'tenant_admin'],
   tenants: ['platform_admin'],
   monitor: ['platform_admin', 'tenant_admin', 'auditor'],
+  ops: ['platform_admin'],
 }
 
 function moduleRoute(name: string, load: () => Promise<unknown>) {
@@ -72,6 +73,7 @@ export const router = createRouter({
           meta: { title: 'orgUsers', roles: ['platform_admin', 'tenant_admin'] as Role[] },
         },
         moduleRoute('monitor', () => import('@/views/monitor/Monitor.vue')),
+        moduleRoute('ops', () => import('@/views/ops/OpsMonitor.vue')),
       ],
     },
   ],

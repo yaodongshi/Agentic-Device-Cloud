@@ -36,6 +36,7 @@ export default {
     tenants: '租户与配额',
     orgUsers: '组织成员与角色',
     monitor: '监控看板',
+    ops: '运维监控',
   },
   login: {
     title: '登录 ADC',
@@ -422,6 +423,11 @@ export default {
       blocked: '已拦截',
       other: '其他',
     },
+  },
+  ops: {
+    noUrl: '未配置 Grafana 面板地址',
+    guideTitle: '需启用 observability profile',
+    guideDesc: '运维监控面板由 Grafana 提供。部署时启用 observability profile，并在构建镜像时注入 VITE_GRAFANA_EMBED_URL（指向 Grafana 看板地址，默认 19300 端口），本页将以 iframe 内嵌显示。',
   },
   errors: {
     '10001': '参数校验失败',
