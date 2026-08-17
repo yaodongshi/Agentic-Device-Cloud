@@ -15,6 +15,8 @@ from evals.models import EvalReport, EvalRunSpec
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse
 
+from app.a2a import build_agent_card
+from app.a2a import router as a2a_router
 from app.llm_router import router as llm_router
 
 DEFAULT_SUITES_DIR_ENV = "ADC_EVAL_SUITES_DIR"
@@ -25,6 +27,11 @@ def create_app(suites_dir: Path | None = None) -> FastAPI:
     harness = EvalHarness(suites_dir or Path(os.environ.get(DEFAULT_SUITES_DIR_ENV, "suites")))
     app = FastAPI(title="ADC Python Agent Plane", version="0.1.0")
     app.include_router(llm_router)
+    app.include_router(a2a_router)
+
+    @app.get("/.well-known/agent-card.json")
+    def agent_card():
+        return build_agent_card().model_dump()
 
     @app.get("/healthz")
     def healthz() -> dict[str, str]:

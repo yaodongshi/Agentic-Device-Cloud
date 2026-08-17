@@ -27,6 +27,7 @@ import (
 	"adc.dev/ce/internal/alerts"
 	"adc.dev/ce/internal/billing"
 	"adc.dev/ce/internal/httpx"
+	"adc.dev/ce/internal/mcpbinding"
 )
 
 // Unified business error codes (design/33 1.5). Like adminauth and
@@ -164,6 +165,11 @@ type Server struct {
 	// the degradation logic is not implemented). nil fails the handlers
 	// closed with 500 code 10007 until the assembly wires it.
 	Billing *billing.Service
+	// Bindings serves the class-A native MCP binding lifecycle (FR-021,
+	// design/82 B5.1, doc/07 chapter 2); nil fails the four
+	// /v1/admin/devices/{deviceID}/mcp-binding* handlers closed with
+	// 500 code 10007 until the assembly wires it.
+	Bindings *mcpbinding.Service
 	// Audit receives admin_op events; nil disables emission (tests,
 	// assemblies without a wired audit pipeline).
 	Audit AuditSink
@@ -251,6 +257,15 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /v1/admin/billing/generate", authz(admin(http.HandlerFunc(s.handleBillingGenerate))))
 	mux.Handle("GET /v1/admin/billing/statements/{statementID}", authz(admin(http.HandlerFunc(s.handleBillingDetail))))
 	mux.Handle("GET /v1/admin/billing/overdue", authz(admin(http.HandlerFunc(s.handleBillingOverdue))))
+
+	// FR-021 class-A native MCP binding lifecycle (design/82 B5.1,
+	// doc/07 seven-step flow): initiate / complete / revoke / status.
+	// The literal /complete and /revoke sub-paths are more specific than
+	// the bare mcp-binding route, so ServeMux disambiguates them.
+	mux.Handle("POST /v1/admin/devices/{deviceID}/mcp-binding", authz(admin(http.HandlerFunc(s.handleInitiateBinding))))
+	mux.Handle("POST /v1/admin/devices/{deviceID}/mcp-binding/complete", authz(admin(http.HandlerFunc(s.handleCompleteBinding))))
+	mux.Handle("POST /v1/admin/devices/{deviceID}/mcp-binding/revoke", authz(admin(http.HandlerFunc(s.handleRevokeBinding))))
+	mux.Handle("GET /v1/admin/devices/{deviceID}/mcp-binding", authz(admin(http.HandlerFunc(s.handleGetBinding))))
 
 	// Trace id propagation guarantees an X-Trace-ID on every response,
 	// including unified error bodies (design/33 1.9).

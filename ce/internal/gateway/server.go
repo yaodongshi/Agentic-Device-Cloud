@@ -178,6 +178,9 @@ func buildTable(backends map[string]*url.URL) (*Table, error) {
 		{"/v1/devices/tunnel", "connector", true},
 		{"/v1/hitl", "approval", false},
 		{"/v2/agents", "pyagent", false},
+		// A2A discovery endpoint (FR-022): the standard well-known location
+		// must reach the agent plane through the unified entry.
+		{"/.well-known", "pyagent", false},
 	}
 	for _, s := range specs {
 		r := Route{Prefix: s.prefix, WSS: s.wss}
