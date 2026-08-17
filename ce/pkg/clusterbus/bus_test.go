@@ -186,8 +186,15 @@ func TestPublishReachesMultipleSubscribers(t *testing.T) {
 	ctx2, cancel2 := context.WithCancel(context.Background())
 	defer cancel2()
 	go func() { _ = bus.Subscribe(ctx2, "topic.broadcast", sub("s2")) }()
-	if !backend.WaitSubscription("topic.broadcast", 1, 2*time.Second) {
-		t.Fatal("topic never gained its shared backend subscription")
+	// The two Subscribe goroutines must both have registered their
+	// broadcast subscribers before Publish (a shared backend subscription
+	// fans out via a snapshot at publish time).
+	deadline := time.Now().Add(2 * time.Second)
+	for bus.SubscriberCount("topic.broadcast") < 2 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if bus.SubscriberCount("topic.broadcast") < 2 {
+		t.Fatal("subscribers never registered")
 	}
 
 	if err := bus.Publish(context.Background(), "topic.broadcast", []byte("hi")); err != nil {

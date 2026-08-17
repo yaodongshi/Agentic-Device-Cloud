@@ -232,6 +232,14 @@ func (b *ValkeyBus) Subscribe(ctx context.Context, topic string, fn func(payload
 	return nil
 }
 
+// SubscriberCount returns the number of registered broadcast subscribers
+// for a topic (test helper: Publish must not race registration).
+func (b *ValkeyBus) SubscriberCount(topic string) int {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return len(b.subs[topic])
+}
+
 // RegisterHandler registers the request-reply handler for a topic and
 // blocks until ctx is done, then removes it. It implements Responder.
 func (b *ValkeyBus) RegisterHandler(ctx context.Context, topic string, fn HandlerFunc) error {
