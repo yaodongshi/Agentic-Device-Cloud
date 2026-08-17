@@ -42,3 +42,4 @@ dist/
 *.log
 .DS_Store
 deploy/.env
+node_modules/
