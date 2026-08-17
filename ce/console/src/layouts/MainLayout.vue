@@ -23,34 +23,54 @@
     <el-container>
       <el-header class="header">
         <span class="page-title">{{ t(`menu.${currentKey}`) }}</span>
-        <el-dropdown
-          v-if="auth.user"
-          trigger="click"
-        >
-          <span class="user">
-            {{ auth.user.displayName }}
-            <el-tag
-              size="small"
-              class="role"
-            >{{ t(`layout.roles.${auth.user.role}`) }}</el-tag>
-          </span>
-          <template #dropdown>
-            <el-dropdown-menu>
-              <el-dropdown-item disabled>
-                {{ t('layout.settings') }}
-              </el-dropdown-item>
-              <el-dropdown-item
-                divided
-                @click="openDocs"
-              >
-                {{ t('layout.docs') }}
-              </el-dropdown-item>
-              <el-dropdown-item @click="confirmLogout">
-                {{ t('layout.logout') }}
-              </el-dropdown-item>
-            </el-dropdown-menu>
-          </template>
-        </el-dropdown>
+        <div class="header-actions">
+          <el-dropdown
+            trigger="click"
+            @command="switchLang"
+          >
+            <el-button text>
+              {{ locale === 'zh-CN' ? '中文' : 'EN' }}
+            </el-button>
+            <template #dropdown>
+              <el-dropdown-menu>
+                <el-dropdown-item command="zh-CN">
+                  中文
+                </el-dropdown-item>
+                <el-dropdown-item command="en">
+                  English
+                </el-dropdown-item>
+              </el-dropdown-menu>
+            </template>
+          </el-dropdown>
+          <el-dropdown
+            v-if="auth.user"
+            trigger="click"
+          >
+            <span class="user">
+              {{ auth.user.displayName }}
+              <el-tag
+                size="small"
+                class="role"
+              >{{ t(`layout.roles.${auth.user.role}`) }}</el-tag>
+            </span>
+            <template #dropdown>
+              <el-dropdown-menu>
+                <el-dropdown-item disabled>
+                  {{ t('layout.settings') }}
+                </el-dropdown-item>
+                <el-dropdown-item
+                  divided
+                  @click="openDocs"
+                >
+                  {{ t('layout.docs') }}
+                </el-dropdown-item>
+                <el-dropdown-item @click="confirmLogout">
+                  {{ t('layout.logout') }}
+                </el-dropdown-item>
+              </el-dropdown-menu>
+            </template>
+          </el-dropdown>
+        </div>
       </el-header>
       <el-main><router-view /></el-main>
     </el-container>
@@ -67,10 +87,11 @@ import { useAuthStore } from '@/stores/auth'
 import { DOCS_URL } from '@/utils/links'
 import type { Role } from '@/api/types'
 
-const { t } = useI18n()
+const { t, locale } = useI18n()
 const route = useRoute()
 const router = useRouter()
 const auth = useAuthStore()
+locale.value = localStorage.getItem('adc_locale') || 'zh-CN'
 
 // Menu visibility by role mirrors the design/20 2.2 matrix mapped onto the
 // design/33 Admin API roles; unknown roles see every module (the backend
@@ -120,20 +141,22 @@ async function confirmLogout() {
     cancelButtonText: t('common.cancel'),
   }).catch(() => false)
   if (!ok) return
-  logout()
-}
-
-async function logout() {
   // Best-effort server-side session invalidation; local state is always
   // cleared even if the call fails (offline/expired session).
   try {
     await api.post('/v1/admin/auth/logout')
   } catch {
-    // ignore: local cleanup below is authoritative for the console
+    // ignore
   }
   auth.clear()
   router.push('/login')
 }
+
+function switchLang(lang: string) {
+  locale.value = lang
+  localStorage.setItem('adc_locale', lang)
+}
+
 </script>
 
 <style scoped>
@@ -141,6 +164,7 @@ async function logout() {
 .aside { background: #fff; border-right: 1px solid var(--adc-border); }
 .brand { height: 56px; display: flex; align-items: center; padding: 0 16px; font-weight: 600; color: var(--adc-brand); }
 .header { display: flex; align-items: center; justify-content: space-between; background: #fff; border-bottom: 1px solid var(--adc-border); }
+.header-actions { display: flex; align-items: center; gap: 8px; }
 .page-title { font-weight: 600; }
 .user { display: inline-flex; align-items: center; gap: var(--adc-space-2); cursor: pointer; color: var(--adc-text); }
 </style>

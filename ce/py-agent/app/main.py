@@ -15,6 +15,8 @@ from evals.models import EvalReport, EvalRunSpec
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse
 
+from app.llm_router import router as llm_router
+
 DEFAULT_SUITES_DIR_ENV = "ADC_EVAL_SUITES_DIR"
 
 
@@ -22,6 +24,7 @@ def create_app(suites_dir: Path | None = None) -> FastAPI:
     """Assemble the application with its own harness instance."""
     harness = EvalHarness(suites_dir or Path(os.environ.get(DEFAULT_SUITES_DIR_ENV, "suites")))
     app = FastAPI(title="ADC Python Agent Plane", version="0.1.0")
+    app.include_router(llm_router)
 
     @app.get("/healthz")
     def healthz() -> dict[str, str]:
