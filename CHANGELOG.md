@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-08-15
+
+### Added
+- Unified entry: console (nginx SPA) is the single public URL; login works out of the box
+- Admin API wired into the server (tenants/devices/api-keys/risk policies/audit/approval-tickets)
+- Seed dataset: demo tenant, 2 devices, 3 tools, demo API key, demo audit events, demo PENDING ticket
+- Tenant-scoped demo accounts (tenant-admin/approver)
+- Dashboard landing page, onboarding guide, actionable empty states
+- Contract alignment: call envelopes, callback error-code ladder, cross-tenant 403
+- Gateway rate limiter live (Valkey token buckets); /metrics via unified entry
+- CI coverage gate enabled (>=70%, measured 75.3%); docs Pages workflow; install handbook
+
+### Fixed
+- Valkey ACL username wiring (audit/metering/wake bus WRONGPASS)
+- Nullable column scan crashes (adminapi devices, approval tickets)
+- Concurrent rate-limit over-admission; JSONB null marshaling; FROZEN status case mismatch
+
 ### Added
 
 ### Changed
