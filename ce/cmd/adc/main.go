@@ -240,6 +240,7 @@ func main() {
 	adminSrv.AuditQuery = adminapi.NewPGAuditQueryRepo(pool.Pool)
 	adminSrv.Tickets = adminapi.NewPGTicketsRepo(pool.Pool)
 	adminSrv.Adapters = buildAdapterRegistry()
+	adminSrv.Market = adminapi.NewPGToolPackageRepo(pool.Pool)
 	// FR-011 batch onboarding (design/82 B1): import job state lives in
 	// Valkey (24h TTL, no schema migration), device groups in PG.
 	adminSrv.ImportJobs = adminapi.NewValkeyImportJobRepo(rdb)

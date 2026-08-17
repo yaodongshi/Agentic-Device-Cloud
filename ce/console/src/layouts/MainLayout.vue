@@ -115,6 +115,9 @@ const menus: MenuItem[] = [
   { path: '/monitor', key: 'monitor', roles: ['platform_admin', 'tenant_admin', 'auditor'] },
   // A2.5: Grafana embed is a platform-level ops view (design/82 A2.5).
   { path: '/ops', key: 'ops', roles: ['platform_admin'] },
+  { path: '/adapters', key: 'adapters', roles: ['platform_admin', 'tenant_admin'] },
+  // Tool package marketplace (design/83 C3.1/C3.2).
+  { path: '/market', key: 'market', roles: ['platform_admin', 'tenant_admin'] },
 ]
 
 const visibleMenus = computed(() =>

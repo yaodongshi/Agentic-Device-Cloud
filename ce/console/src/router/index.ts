@@ -18,6 +18,8 @@ const moduleRoles: Record<string, Role[]> = {
   billing: ['platform_admin'],
   monitor: ['platform_admin', 'tenant_admin', 'auditor'],
   ops: ['platform_admin'],
+  adapters: ['platform_admin', 'tenant_admin'],
+  market: ['platform_admin', 'tenant_admin'],
 }
 
 function moduleRoute(name: string, load: () => Promise<unknown>) {
@@ -78,6 +80,10 @@ export const router = createRouter({
         },
         moduleRoute('monitor', () => import('@/views/monitor/Monitor.vue')),
         moduleRoute('ops', () => import('@/views/ops/OpsMonitor.vue')),
+        moduleRoute('adapters', () => import('@/views/adapters/Adapters.vue')),
+        // Tool package marketplace (design/83 C3.1/C3.2): browse/search/
+        // install/uninstall plus the publish form.
+        moduleRoute('market', () => import('@/views/market/Market.vue')),
       ],
     },
   ],

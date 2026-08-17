@@ -173,6 +173,10 @@ type Server struct {
 	// /v1/admin/devices/{deviceID}/mcp-binding* handlers closed with
 	// 500 code 10007 until the assembly wires it.
 	Bindings *mcpbinding.Service
+	// Market serves the tool package marketplace (design/83 C3.1/C3.2,
+	// design/82 C3); nil fails the five /v1/admin/tool-packages*
+	// handlers closed with 500 code 10007 until the assembly wires it.
+	Market ToolPackageRepo
 	// Audit receives admin_op events; nil disables emission (tests,
 	// assemblies without a wired audit pipeline).
 	Audit AuditSink
@@ -270,6 +274,17 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /v1/admin/devices/{deviceID}/mcp-binding/complete", authz(admin(http.HandlerFunc(s.handleCompleteBinding))))
 	mux.Handle("POST /v1/admin/devices/{deviceID}/mcp-binding/revoke", authz(admin(http.HandlerFunc(s.handleRevokeBinding))))
 	mux.Handle("GET /v1/admin/devices/{deviceID}/mcp-binding", authz(admin(http.HandlerFunc(s.handleGetBinding))))
+
+	// Tool package marketplace (design/83 C3.1/C3.2). Publish is admin
+	// (platform/tenant) only; visibility and per-tenant install scope are
+	// enforced in-handler (market.go). The literal /install and
+	// /uninstall sub-paths are more specific than the bare package route,
+	// so ServeMux disambiguates them.
+	mux.Handle("POST /v1/admin/tool-packages", authz(admin(http.HandlerFunc(s.handlePublishToolPackage))))
+	mux.Handle("GET /v1/admin/tool-packages", authz(admin(http.HandlerFunc(s.handleListToolPackages))))
+	mux.Handle("GET /v1/admin/tool-packages/{packageID}", authz(admin(http.HandlerFunc(s.handleGetToolPackage))))
+	mux.Handle("POST /v1/admin/tool-packages/{packageID}/install", authz(admin(http.HandlerFunc(s.handleInstallToolPackage))))
+	mux.Handle("POST /v1/admin/tool-packages/{packageID}/uninstall", authz(admin(http.HandlerFunc(s.handleUninstallToolPackage))))
 
 	// Trace id propagation guarantees an X-Trace-ID on every response,
 	// including unified error bodies (design/33 1.9).
