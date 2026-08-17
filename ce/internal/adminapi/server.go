@@ -145,6 +145,9 @@ type Server struct {
 	// Tickets is the read-only approval ticket list for the console
 	// (design/33 3.1.15); nil fails the handler closed.
 	Tickets TicketsRepo
+	// Adapters is the protocol-adapter registry status view (design/83
+	// C1.5); nil fails the handler closed.
+	Adapters AdapterRegistry
 	// AlertRules persists the FR-017 tenant alert rule set (design/82 B2,
 	// internal/alerts); AlertEvents serves the fired-alert history.
 	// nil fails the handlers closed.
@@ -240,6 +243,7 @@ func (s *Server) Handler() http.Handler {
 	// so the POST export below is admin-only until that matrix is
 	// widened (follow-up; see audit.go).
 	auditRead := adminauth.RequireRole(adminauth.RoleAdmin, adminauth.RoleAuditor)
+	mux.Handle("GET /v1/admin/adapters", authz(admin(http.HandlerFunc(s.handleAdaptersList))))
 	mux.Handle("GET /v1/admin/approval-tickets", authz(admin(http.HandlerFunc(s.handleTicketsList))))
 	mux.Handle("GET /v1/admin/audit-logs", authz(auditRead(http.HandlerFunc(s.handleAuditLogs))))
 	mux.Handle("POST /v1/admin/audit-logs/export", authz(auditRead(http.HandlerFunc(s.handleAuditExport))))

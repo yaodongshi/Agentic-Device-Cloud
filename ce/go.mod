@@ -4,14 +4,16 @@ go 1.26
 
 require (
 	adc.dev/core-sdk v0.0.0
+	github.com/goburrow/modbus v0.1.0
 	github.com/gorilla/websocket v1.5.3
+	github.com/pashagolub/pgxmock/v4 v4.5.0
 	github.com/redis/go-redis/v9 v9.22.0
 	golang.org/x/crypto v0.55.0
 )
 
 require (
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
-	github.com/pashagolub/pgxmock/v4 v4.5.0 // indirect
+	github.com/goburrow/serial v0.1.0 // indirect
 	go.uber.org/atomic v1.11.0 // indirect
 	golang.org/x/sys v0.47.0 // indirect
 )

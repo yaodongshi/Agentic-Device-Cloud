@@ -25,6 +25,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/redis/go-redis/v9"
 
+	"adc.dev/ce/internal/adapters"
 	"adc.dev/ce/internal/adminapi"
 	"adc.dev/ce/internal/adminauth"
 	"adc.dev/ce/internal/agentapi"
@@ -238,6 +239,7 @@ func main() {
 	adminSrv.Policies = adminapi.NewPGPolicyRepo(pool.Pool)
 	adminSrv.AuditQuery = adminapi.NewPGAuditQueryRepo(pool.Pool)
 	adminSrv.Tickets = adminapi.NewPGTicketsRepo(pool.Pool)
+	adminSrv.Adapters = buildAdapterRegistry()
 	// FR-011 batch onboarding (design/82 B1): import job state lives in
 	// Valkey (24h TTL, no schema migration), device groups in PG.
 	adminSrv.ImportJobs = adminapi.NewValkeyImportJobRepo(rdb)
@@ -1110,4 +1112,34 @@ func generateDemoKeyMaterial() (keyID, prefix, secret, keyHash, secretHash strin
 	}
 	secret = hex.EncodeToString(sb)
 	return keyID, prefix, secret, agentauth.HashKeyID(keyID), agentauth.HashSecret(secret), nil
+}
+
+// buildAdapterRegistry wires the protocol adapters (design/83 C1.5). The
+// Modbus adapter is created when ADC_MODBUS_JSON points at a register-map
+// config; otherwise the registry starts empty and reports no adapters.
+func buildAdapterRegistry() *adapters.Registry {
+	reg := adapters.NewRegistry()
+	cfgPath := os.Getenv("ADC_MODBUS_JSON")
+	if cfgPath == "" {
+		return reg
+	}
+	raw, err := os.ReadFile(cfgPath)
+	if err != nil {
+		slog.Warn("modbus adapter disabled: cannot read config", "path", cfgPath, "err", err)
+		return reg
+	}
+	var cfg adapters.Config
+	if err := json.Unmarshal(raw, &cfg); err != nil {
+		slog.Warn("modbus adapter disabled: bad config", "err", err)
+		return reg
+	}
+	adapter, err := adapters.NewModbusAdapter(&cfg)
+	if err != nil {
+		slog.Warn("modbus adapter disabled", "err", err)
+		return reg
+	}
+	if err := reg.Register(adapter); err != nil {
+		slog.Warn("modbus adapter register failed", "err", err)
+	}
+	return reg
 }
