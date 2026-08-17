@@ -15,6 +15,7 @@ const moduleRoles: Record<string, Role[]> = {
   audit: ['platform_admin', 'tenant_admin', 'auditor'],
   apiKeys: ['platform_admin', 'tenant_admin'],
   tenants: ['platform_admin'],
+  billing: ['platform_admin'],
   monitor: ['platform_admin', 'tenant_admin', 'auditor'],
   ops: ['platform_admin'],
 }
@@ -64,6 +65,9 @@ export const router = createRouter({
         moduleRoute('audit', () => import('@/views/audit/Audit.vue')),
         moduleRoute('apiKeys', () => import('@/views/apikeys/ApiKeys.vue')),
         moduleRoute('tenants', () => import('@/views/tenants/Tenants.vue')),
+        // Billing is a platform-level commercial surface (FR-016,
+        // design/82 B3.2): statements, generation and reconciliation.
+        moduleRoute('billing', () => import('@/views/billing/Billing.vue')),
         // Org members sub-page of a tenant (F-09, design/20 4.11); not a top
         // menu item, entered from the tenants row action.
         {

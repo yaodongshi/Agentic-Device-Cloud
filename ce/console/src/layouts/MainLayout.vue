@@ -89,6 +89,8 @@ const menus: MenuItem[] = [
   { path: '/audit', key: 'audit', roles: ['platform_admin', 'tenant_admin', 'auditor'] },
   { path: '/api-keys', key: 'apiKeys', roles: ['platform_admin', 'tenant_admin'] },
   { path: '/tenants', key: 'tenants', roles: ['platform_admin'] },
+  // Billing (FR-016, design/82 B3.2): platform-level commercial surface.
+  { path: '/billing', key: 'billing', roles: ['platform_admin'] },
   { path: '/monitor', key: 'monitor', roles: ['platform_admin', 'tenant_admin', 'auditor'] },
   // A2.5: Grafana embed is a platform-level ops view (design/82 A2.5).
   { path: '/ops', key: 'ops', roles: ['platform_admin'] },

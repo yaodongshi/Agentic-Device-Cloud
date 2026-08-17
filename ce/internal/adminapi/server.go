@@ -25,6 +25,7 @@ import (
 
 	"adc.dev/ce/internal/adminauth"
 	"adc.dev/ce/internal/alerts"
+	"adc.dev/ce/internal/billing"
 	"adc.dev/ce/internal/httpx"
 )
 
@@ -157,6 +158,12 @@ type Server struct {
 	// ExportMaxRows caps the synchronous audit CSV export (FR-013
 	// BR-013-03); zero falls back to defaultExportMaxRows.
 	ExportMaxRows int
+	// Billing serves the FR-016 billing surface (design/82 B3):
+	// statement list/generate/detail plus the overdue flag for the
+	// gateway quota soft-limit seam (B3.3 — only the state is exposed,
+	// the degradation logic is not implemented). nil fails the handlers
+	// closed with 500 code 10007 until the assembly wires it.
+	Billing *billing.Service
 	// Audit receives admin_op events; nil disables emission (tests,
 	// assemblies without a wired audit pipeline).
 	Audit AuditSink
@@ -237,6 +244,13 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /v1/admin/alerts/rules", authz(admin(http.HandlerFunc(s.handleGetAlertRules))))
 	mux.Handle("PUT /v1/admin/alerts/rules", authz(admin(http.HandlerFunc(s.handlePutAlertRules))))
 	mux.Handle("GET /v1/admin/alerts/events", authz(admin(http.HandlerFunc(s.handleGetAlertEvents))))
+
+	// FR-016 billing surface (design/82 B3). List/detail/overdue are
+	// tenant-scoped in-handler; generate is a platform_admin exclusive.
+	mux.Handle("GET /v1/admin/billing/statements", authz(admin(http.HandlerFunc(s.handleBillingList))))
+	mux.Handle("POST /v1/admin/billing/generate", authz(admin(http.HandlerFunc(s.handleBillingGenerate))))
+	mux.Handle("GET /v1/admin/billing/statements/{statementID}", authz(admin(http.HandlerFunc(s.handleBillingDetail))))
+	mux.Handle("GET /v1/admin/billing/overdue", authz(admin(http.HandlerFunc(s.handleBillingOverdue))))
 
 	// Trace id propagation guarantees an X-Trace-ID on every response,
 	// including unified error bodies (design/33 1.9).
