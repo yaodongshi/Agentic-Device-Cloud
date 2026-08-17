@@ -1,7 +1,16 @@
 <template>
   <div class="login">
     <div class="brand">
-      <h1>{{ t('common.appName') }}</h1>
+      <!-- C2.1 white-label brand (design/83): logo + title come from the
+           branding store (GET /v1/admin/branding), defaulting to the
+           i18n app name when the platform brand is unconfigured. -->
+      <img
+        v-if="branding.logoUrl"
+        :src="branding.logoUrl"
+        class="logo"
+        alt=""
+      >
+      <h1>{{ branding.displayTitle }}</h1>
       <p>{{ t('login.subtitle') }}</p>
     </div>
     <el-card class="card">
@@ -79,11 +88,13 @@ import type { FormInstance, FormRules } from 'element-plus'
 import { api } from '@/api/request'
 import { errorMessage } from '@/api/errors'
 import { useAuthStore } from '@/stores/auth'
+import { useBrandingStore } from '@/stores/branding'
 import type { LoginResponse } from '@/api/types'
 
 const { t } = useI18n()
 const router = useRouter()
 const auth = useAuthStore()
+const branding = useBrandingStore()
 
 const formRef = ref<FormInstance>()
 const loading = ref(false)
@@ -126,6 +137,7 @@ async function submit() {
 <style scoped>
 .login { min-height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; background: var(--adc-bg); }
 .brand { text-align: center; margin-bottom: var(--adc-space-6); }
+.brand .logo { height: 40px; margin-bottom: var(--adc-space-2); }
 .brand h1 { margin: 0; color: var(--adc-brand); font-size: 26px; }
 .brand p { margin: var(--adc-space-1) 0 0; color: var(--adc-text-secondary); }
 .card { width: 380px; }

@@ -534,7 +534,7 @@ func TestPGTenantRepoUpdate(t *testing.T) {
 
 	m.ExpectQuery(regexp.QuoteMeta(`UPDATE adc_tenants
 		SET quota_devices = $2, quota_calls_monthly = $3, status = $4,
-		    metadata = $5, updated_at = now()
+		    metadata = COALESCE(metadata, '{}'::jsonb) || $5::jsonb, updated_at = now()
 		WHERE id = $1::uuid AND deleted_at IS NULL
 		  AND used_devices <= $2 AND used_calls_month <= $3
 		RETURNING `+tenantCols)).
@@ -547,7 +547,7 @@ func TestPGTenantRepoUpdate(t *testing.T) {
 	// zero-row update -> re-read shows usage above new quota
 	m.ExpectQuery(regexp.QuoteMeta(`UPDATE adc_tenants
 		SET quota_devices = $2, quota_calls_monthly = $3, status = $4,
-		    metadata = $5, updated_at = now()
+		    metadata = COALESCE(metadata, '{}'::jsonb) || $5::jsonb, updated_at = now()
 		WHERE id = $1::uuid AND deleted_at IS NULL
 		  AND used_devices <= $2 AND used_calls_month <= $3
 		RETURNING `+tenantCols)).
@@ -563,7 +563,7 @@ func TestPGTenantRepoUpdate(t *testing.T) {
 	// zero-row update -> re-read -> tenant gone
 	m.ExpectQuery(regexp.QuoteMeta(`UPDATE adc_tenants
 		SET quota_devices = $2, quota_calls_monthly = $3, status = $4,
-		    metadata = $5, updated_at = now()
+		    metadata = COALESCE(metadata, '{}'::jsonb) || $5::jsonb, updated_at = now()
 		WHERE id = $1::uuid AND deleted_at IS NULL
 		  AND used_devices <= $2 AND used_calls_month <= $3
 		RETURNING `+tenantCols)).
@@ -573,6 +573,60 @@ func TestPGTenantRepoUpdate(t *testing.T) {
 		WithArgs(testTenant).
 		WillReturnRows(pgxmock.NewRows(tenantRowCols))
 	if _, err := repo.Update(context.Background(), testTenant, in); !errors.Is(err, ErrTenantNotFound) {
+		t.Fatalf("want ErrTenantNotFound, got %v", err)
+	}
+
+	if err := m.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet expectations: %v", err)
+	}
+}
+
+func TestPGTenantRepoMeta(t *testing.T) {
+	m := newMockPool(t)
+	repo := NewPGTenantRepo(m)
+
+	// GetMeta decodes the stored document; an empty column decodes to
+	// an empty map.
+	m.ExpectQuery(regexp.QuoteMeta(`SELECT COALESCE(metadata, '{}'::jsonb)
+		FROM adc_tenants WHERE id = $1::uuid AND deleted_at IS NULL`)).
+		WithArgs(testTenant).
+		WillReturnRows(pgxmock.NewRows([]string{"metadata"}).AddRow([]byte(`{"branding":{"title":"Acme"},"budget_monthly_cents":10000}`)))
+	meta, err := repo.GetMeta(context.Background(), testTenant)
+	if err != nil {
+		t.Fatalf("GetMeta: %v", err)
+	}
+	if got := metaInt64(meta, "budget_monthly_cents"); got != 10000 {
+		t.Fatalf("budget = %d, want 10000", got)
+	}
+
+	// SetMeta merges set keys and removes nil-valued keys in one
+	// UPDATE; unknown tenants answer ErrTenantNotFound.
+	m.ExpectQuery(regexp.QuoteMeta(`UPDATE adc_tenants
+		SET metadata = COALESCE(metadata, '{}'::jsonb) || $2::jsonb - $3,
+		    updated_at = now()
+		WHERE id = $1::uuid AND deleted_at IS NULL
+		RETURNING metadata`)).
+		WithArgs(testTenant, `{"branding":{"title":"Acme 2"}}`, []string{"budget_monthly_cents"}).
+		WillReturnRows(pgxmock.NewRows([]string{"metadata"}).AddRow([]byte(`{"branding":{"title":"Acme 2"}}`)))
+	meta, err = repo.SetMeta(context.Background(), testTenant, map[string]any{
+		"branding":             map[string]any{"title": "Acme 2"},
+		"budget_monthly_cents": nil,
+	})
+	if err != nil {
+		t.Fatalf("SetMeta: %v", err)
+	}
+	if _, ok := meta["budget_monthly_cents"]; ok {
+		t.Fatalf("budget key not removed: %+v", meta)
+	}
+
+	m.ExpectQuery(regexp.QuoteMeta(`UPDATE adc_tenants
+		SET metadata = COALESCE(metadata, '{}'::jsonb) || $2::jsonb - $3,
+		    updated_at = now()
+		WHERE id = $1::uuid AND deleted_at IS NULL
+		RETURNING metadata`)).
+		WithArgs(testUUID2, `{}`, []string{}).
+		WillReturnRows(pgxmock.NewRows([]string{"metadata"}))
+	if _, err := repo.SetMeta(context.Background(), testUUID2, map[string]any{}); !errors.Is(err, ErrTenantNotFound) {
 		t.Fatalf("want ErrTenantNotFound, got %v", err)
 	}
 

@@ -5,7 +5,16 @@
       class="aside"
     >
       <div class="brand">
-        {{ t('common.appName') }}
+        <!-- C2.1 white-label brand (design/83): the configured logo (when
+             present) plus the brand title from the branding store; the
+             platform default renders the i18n app name. -->
+        <img
+          v-if="branding.logoUrl"
+          :src="branding.logoUrl"
+          class="brand-logo"
+          alt=""
+        >
+        <span>{{ branding.displayTitle }}</span>
       </div>
       <el-menu
         :default-active="activeMenu"
@@ -78,12 +87,13 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessageBox } from 'element-plus'
 import { api } from '@/api/request'
 import { useAuthStore } from '@/stores/auth'
+import { useBrandingStore } from '@/stores/branding'
 import { DOCS_URL } from '@/utils/links'
 import type { Role } from '@/api/types'
 
@@ -91,7 +101,15 @@ const { t, locale } = useI18n()
 const route = useRoute()
 const router = useRouter()
 const auth = useAuthStore()
+const branding = useBrandingStore()
 locale.value = localStorage.getItem('adc_locale') || 'zh-CN'
+
+// C2.1: reload the brand once the layout mounts so a fresh login (whose
+// app-init fetch ran without a session) picks up the tenant-scoped
+// branding the request layer attaches via the stored session user.
+onMounted(() => {
+  void branding.load()
+})
 
 // Menu visibility by role mirrors the design/20 2.2 matrix mapped onto the
 // design/33 Admin API roles; unknown roles see every module (the backend
@@ -158,6 +176,9 @@ async function confirmLogout() {
 function switchLang(lang: string) {
   locale.value = lang
   localStorage.setItem('adc_locale', lang)
+  // Re-apply the brand so the tab title follows the new locale for the
+  // platform-default brand (the display title derives from i18n).
+  branding.apply()
 }
 
 </script>
@@ -166,6 +187,7 @@ function switchLang(lang: string) {
 .layout { height: 100vh; }
 .aside { background: #fff; border-right: 1px solid var(--adc-border); }
 .brand { height: 56px; display: flex; align-items: center; padding: 0 16px; font-weight: 600; color: var(--adc-brand); }
+.brand-logo { height: 24px; margin-right: var(--adc-space-2); }
 .header { display: flex; align-items: center; justify-content: space-between; background: #fff; border-bottom: 1px solid var(--adc-border); }
 .header-actions { display: flex; align-items: center; gap: 8px; }
 .page-title { font-weight: 600; }

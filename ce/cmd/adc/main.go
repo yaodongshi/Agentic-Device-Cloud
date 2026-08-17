@@ -215,6 +215,7 @@ func main() {
 		&observingRouter{inner: routerWithMeter, obs: obs}, policy,
 		&observingHITL{inner: hitl, obs: obs})
 	agentSrv.Audit = audit.NewValkeySink(rdb)
+	agentSrv.Guard = agentapi.SchemaParamGuard{Contract: pgParamRules(pool)}
 
 	// --- audit pipeline (SEC-07) ---
 	auditWorker := audit.NewValkeyWorker(rdb, pool.Pool)
@@ -228,7 +229,9 @@ func main() {
 	// Admin surface; admins authenticate through adminauth against
 	// adc_users (seeded by -seed).
 	sessions := adminauth.NewValkeySessionStore(rdb)
-	authHandler := adminauth.NewHandler(adminauth.NewPGUserStore(pool.Pool), sessions)
+	users := adminauth.NewPGUserStore(pool.Pool)
+	authHandler := adminauth.NewHandler(users, sessions)
+	authHandler.OIDC = wireOIDC(users, sessions, rdb)
 	adminSrv := adminapi.NewServer(
 		adminapi.NewPGTenantRepo(pool.Pool),
 		adminapi.NewPGDeviceRepo(pool.Pool),
@@ -241,6 +244,7 @@ func main() {
 	adminSrv.Tickets = adminapi.NewPGTicketsRepo(pool.Pool)
 	adminSrv.Adapters = buildAdapterRegistry()
 	adminSrv.Market = adminapi.NewPGToolPackageRepo(pool.Pool)
+	adminSrv.BudgetUsage = wireBudgetUsage(pool)
 	// FR-011 batch onboarding (design/82 B1): import job state lives in
 	// Valkey (24h TTL, no schema migration), device groups in PG.
 	adminSrv.ImportJobs = adminapi.NewValkeyImportJobRepo(rdb)
@@ -1143,4 +1147,65 @@ func buildAdapterRegistry() *adapters.Registry {
 		slog.Warn("modbus adapter register failed", "err", err)
 	}
 	return reg
+}
+
+// --- M7 wiring (design/83): budget usage, param guard, OIDC ---
+
+// pgBudgetUsage wires the billing usage seam for tenant budget status.
+func wireBudgetUsage(pool *db.Pool) adminapi.BudgetUsageRepo {
+	return adminapi.NewPGBudgetUsageRepo(pool.Pool)
+}
+
+// pgParamRules loads adc_param_rules from adc_device_tools.annotations for
+// the param guard (C5.2); a missing row means "no extra rules".
+func pgParamRules(pool *db.Pool) agentapi.ParamRulesProvider {
+	return func(ctx context.Context, tenantID, deviceID, toolName string) (*agentapi.ParamContract, error) {
+		var schemaText, annText string
+		err := pool.QueryRow(ctx, `
+			SELECT t.input_schema::text, COALESCE(t.annotations::text,'{}')
+			FROM adc_device_tools t
+			JOIN adc_devices d ON d.id = t.device_id
+			WHERE d.tenant_id=$1::uuid AND d.device_code=$2 AND t.tool_name=$3`,
+			tenantID, deviceID, toolName).Scan(&schemaText, &annText)
+		if err != nil {
+			return nil, err
+		}
+		var schema, ann map[string]any
+		if err := json.Unmarshal([]byte(schemaText), &schema); err != nil {
+			return nil, err
+		}
+		_ = json.Unmarshal([]byte(annText), &ann)
+		return &agentapi.ParamContract{InputSchema: schema, Rules: agentapi.ParseParamRules(ann)}, nil
+	}
+}
+
+// wireOIDC builds the OIDC login path when ADC_OIDC_ENABLE=true (design/83
+// C4.1). The provider implements the standard authorization-code flow with
+// OIDC discovery (RFC 8414); disabled otherwise (endpoints answer 404).
+func wireOIDC(users adminauth.UserStore, sessions adminauth.SessionStore, rdb *redis.Client) *adminauth.OIDCHandler {
+	if os.Getenv("ADC_OIDC_ENABLE") != "true" {
+		return nil
+	}
+	provider := newGenericOIDCProvider(
+		os.Getenv("ADC_OIDC_ISSUER"),
+		os.Getenv("ADC_OIDC_CLIENT_ID"),
+		os.Getenv("ADC_OIDC_CLIENT_SECRET"),
+		os.Getenv("ADC_OIDC_REDIRECT_URL"),
+	)
+	cfg := adminauth.OIDCConfig{
+		Issuer:       os.Getenv("ADC_OIDC_ISSUER"),
+		ClientID:     os.Getenv("ADC_OIDC_CLIENT_ID"),
+		ClientSecret: os.Getenv("ADC_OIDC_CLIENT_SECRET"),
+		RedirectURL:  os.Getenv("ADC_OIDC_REDIRECT_URL"),
+		Scope:        getenvDef("ADC_OIDC_SCOPE", "openid email profile"),
+	}
+	states := adminauth.NewValkeyOIDCStateStore(rdb)
+	return adminauth.NewOIDCHandler(users, sessions, provider, states, cfg)
+}
+
+func getenvDef(k, def string) string {
+	if v := os.Getenv(k); v != "" {
+		return v
+	}
+	return def
 }

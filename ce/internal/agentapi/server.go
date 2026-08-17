@@ -54,6 +54,10 @@ type Server struct {
 	HITL       HITLClient
 	Audit      audit.AuditSink // nil disables audit emission (tests)
 
+	// Guard validates call arguments before Policy.Decide (design/83
+	// C5.2). nil disables parameter validation entirely.
+	Guard ParamGuard
+
 	// AwaitWindow bounds how long a pending call waits for approval.
 	AwaitWindow time.Duration
 
@@ -120,6 +124,20 @@ func (s *Server) handleToolCall(w http.ResponseWriter, r *http.Request) {
 		}
 		httpx.WriteError(w, http.StatusBadRequest, CodeToolNotFound, err.Error(), httpx.TraceIDFrom(r))
 		return
+	}
+	// C5.2: validate arguments before any risk decision, so both the
+	// free-run path and the HITL path reject malformed calls (400 code
+	// 12004) and no ticket is ever created for them.
+	if s.Guard != nil {
+		perr, err := s.Guard.Validate(r.Context(), p.TenantID, ref, req.Arguments)
+		if err != nil {
+			httpx.WriteError(w, http.StatusInternalServerError, "10006", "parameter validation failed", httpx.TraceIDFrom(r))
+			return
+		}
+		if perr != nil {
+			writeParamError(w, r, perr)
+			return
+		}
 	}
 	decision, err := s.Policy.Decide(r.Context(), p.TenantID, ref)
 	if err != nil {

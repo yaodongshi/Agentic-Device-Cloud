@@ -84,6 +84,16 @@
           />
         </template>
       </el-table-column>
+      <!-- C5.1 budget (design/83): current month billed vs the monthly
+           budget line, WARN at 80% / EXCEEDED at 100%. -->
+      <el-table-column
+        :label="t('tenants.budget')"
+        min-width="220"
+      >
+        <template #default="{ row }">
+          <budget-cell :status="budgets[row.tenant_id]" />
+        </template>
+      </el-table-column>
       <el-table-column
         :label="t('tenants.expiresAt')"
         width="120"
@@ -116,6 +126,13 @@
             @click="openEdit(row)"
           >
             {{ t('tenants.configure') }}
+          </el-button>
+          <el-button
+            link
+            type="primary"
+            @click="openBudget(row)"
+          >
+            {{ t('tenants.budget') }}
           </el-button>
           <el-button
             link
@@ -349,6 +366,82 @@
         </el-button>
       </template>
     </el-dialog>
+
+    <!-- C5.1 budget settings dialog (PUT /v1/admin/tenants/{id}/budget,
+         design/83): shows the current month's bill against the budget
+         line and lets a platform admin set/clear the line. -->
+    <el-dialog
+      v-model="budgetVisible"
+      :title="t('tenants.budgetTitle')"
+      width="480px"
+    >
+      <div class="edit-name">
+        {{ budgetTenant?.name }}
+      </div>
+      <div
+        v-if="budgetStatus"
+        class="budget-now"
+      >
+        <div class="budget-now-row">
+          <span>{{ t('tenants.budgetCurrent') }}</span>
+          <span>{{ fenToYuan(budgetStatus.billed_fen) }} 元</span>
+        </div>
+        <el-tag
+          v-if="budgetStatus.status !== 'OK'"
+          :type="budgetStatus.status === 'EXCEEDED' ? 'danger' : 'warning'"
+          size="small"
+          effect="light"
+        >
+          {{ t(`tenants.budgetStatuses.${budgetStatus.status}`) }}
+        </el-tag>
+      </div>
+      <el-form
+        ref="budgetFormRef"
+        :model="budgetForm"
+        :rules="budgetRules"
+        label-width="140px"
+      >
+        <el-form-item
+          :label="t('tenants.budgetLineLabel')"
+          prop="budget_yuan"
+        >
+          <el-input-number
+            v-model="budgetForm.budget_yuan"
+            :min="0"
+            :step="100"
+            :precision="2"
+            controls-position="right"
+            class="full"
+          />
+          <div class="hint">
+            {{ t('tenants.budgetHint') }}
+          </div>
+        </el-form-item>
+        <el-form-item
+          :label="t('common.reason')"
+          prop="change_reason"
+        >
+          <el-input
+            v-model="budgetForm.change_reason"
+            type="textarea"
+            :rows="2"
+            :placeholder="t('common.reasonPlaceholder')"
+          />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="budgetVisible = false">
+          {{ t('common.cancel') }}
+        </el-button>
+        <el-button
+          type="primary"
+          :loading="saving"
+          @click="submitBudget"
+        >
+          {{ t('common.save') }}
+        </el-button>
+      </template>
+    </el-dialog>
   </el-card>
 </template>
 
@@ -360,7 +453,11 @@ import { ElMessage } from 'element-plus'
 import type { FormInstance, FormRules } from 'element-plus'
 import { api } from '@/api/request'
 import { errorMessage } from '@/api/errors'
+import { fenToYuan } from '@/api/billing'
+import { fetchBudgetStatus, putBudgetLine } from '@/api/budget'
+import type { BudgetStatus } from '@/api/budget'
 import QuotaCell from '@/components/QuotaCell.vue'
+import BudgetCell from '@/components/BudgetCell.vue'
 import { formatDate, formatTime } from '@/utils/format'
 import type { CreateTenantPayload, Page, Tenant, TenantPatchPayload, TenantQuota } from '@/api/types'
 
@@ -376,6 +473,10 @@ const list = ref<Tenant[]>([])
 const total = ref(0)
 const page = ref(1)
 const pageSize = ref(20)
+
+// C5.1: tenant_id -> budget status of the visible page (enriched per
+// fetch); the dialog reads the same cache.
+const budgets = ref<Record<string, BudgetStatus>>({})
 
 const filters = reactive({ keyword: '', status: '' })
 
@@ -426,6 +527,14 @@ async function enrichRows(items: Tenant[]): Promise<Tenant[]> {
       if (detail.used_devices !== undefined) row.used_devices = detail.used_devices
       if (detail.used_calls_month !== undefined) row.used_calls_month = detail.used_calls_month
       if (detail.expires_at !== undefined) row.expires_at = detail.expires_at
+    }),
+  )
+  // C5.1: enrich every visible row with its budget status in parallel;
+  // a failing row simply renders "not set" in the budget cell.
+  await Promise.allSettled(
+    rows.map(async (row) => {
+      const st = await fetchBudgetStatus(row.tenant_id)
+      budgets.value[row.tenant_id] = st
     }),
   )
   return rows
@@ -602,6 +711,54 @@ function openMembers(row: Tenant) {
   router.push(`/tenants/${row.tenant_id}/users`)
 }
 
+// Budget settings (C5.1, design/83): the line is edited in yuan and
+// converted to integer fen on submit; 0 clears the line. The dialog
+// opens with the row's enriched status so the current month's bill is
+// visible next to the input.
+const budgetVisible = ref(false)
+const budgetFormRef = ref<FormInstance>()
+const budgetTenant = ref<Tenant>()
+const budgetForm = reactive({ budget_yuan: 0, change_reason: '' })
+
+const budgetRules: FormRules = {
+  budget_yuan: [{ required: true, type: 'number', message: t('tenants.budgetLineLabel'), trigger: 'change' }],
+  change_reason: [{ required: true, message: t('common.reasonPlaceholder'), trigger: 'blur' }],
+}
+
+const budgetStatus = computed(() =>
+  budgetTenant.value ? (budgets.value[budgetTenant.value.tenant_id] ?? null) : null,
+)
+
+function openBudget(row: Tenant) {
+  budgetTenant.value = row
+  budgetFormRef.value?.resetFields()
+  const current = budgets.value[row.tenant_id]
+  Object.assign(budgetForm, {
+    budget_yuan: current ? current.budget_monthly_cents / 100 : 0,
+    change_reason: '',
+  })
+  budgetVisible.value = true
+}
+
+async function submitBudget() {
+  const valid = await budgetFormRef.value?.validate().catch(() => false)
+  if (!valid || !budgetTenant.value) return
+  saving.value = true
+  try {
+    const tenant = budgetTenant.value
+    // Yuan (up to 2 decimals) -> integer fen: round to the closest fen.
+    const cents = Math.round((budgetForm.budget_yuan || 0) * 100)
+    await putBudgetLine(tenant.tenant_id, cents, budgetForm.change_reason.trim())
+    budgetVisible.value = false
+    ElMessage.success(t('tenants.budgetSaveSuccess'))
+    await fetchList()
+  } catch (err) {
+    ElMessage.error(errorMessage(err, t))
+  } finally {
+    saving.value = false
+  }
+}
+
 onMounted(fetchList)
 </script>
 
@@ -615,6 +772,8 @@ onMounted(fetchList)
 .hint { width: 100%; font-size: 12px; color: var(--adc-text-secondary); line-height: 1.4; }
 .reason { padding: var(--adc-space-2) 0; }
 .edit-name { font-weight: 600; margin-bottom: var(--adc-space-3); }
+.budget-now { display: flex; flex-direction: column; gap: var(--adc-space-2); padding: var(--adc-space-3); background: var(--adc-bg); border-radius: var(--adc-radius); margin-bottom: var(--adc-space-3); }
+.budget-now-row { display: flex; justify-content: space-between; color: var(--adc-text-secondary); font-size: 13px; }
 .muted { color: var(--adc-text-secondary); }
 .empty-actions { display: flex; justify-content: center; }
 </style>

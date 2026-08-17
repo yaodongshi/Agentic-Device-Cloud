@@ -177,6 +177,10 @@ type Server struct {
 	// design/82 C3); nil fails the five /v1/admin/tool-packages*
 	// handlers closed with 500 code 10007 until the assembly wires it.
 	Market ToolPackageRepo
+	// BudgetUsage prices the current month's metered fee for the C5.1
+	// budget status endpoint (design/83); nil fails the handler closed
+	// with 500 code 10007 until the assembly wires it.
+	BudgetUsage BudgetUsageRepo
 	// Audit receives admin_op events; nil disables emission (tests,
 	// assemblies without a wired audit pipeline).
 	Audit AuditSink
@@ -236,6 +240,18 @@ func (s *Server) Handler() http.Handler {
 
 	mux.Handle("GET /v1/admin/tenants/{tenantID}/approval-policy", authz(admin(http.HandlerFunc(s.handleGetApprovalPolicy))))
 	mux.Handle("PUT /v1/admin/tenants/{tenantID}/approval-policy", authz(admin(http.HandlerFunc(s.handlePutApprovalPolicy))))
+
+	// C2.1 white-label branding (design/83): the GET is public so the
+	// login page can brand before authentication; the PUT is a
+	// platform_admin exclusive merged into the tenant metadata JSONB.
+	mux.Handle("GET /v1/admin/branding", http.HandlerFunc(s.handleGetBranding))
+	mux.Handle("PUT /v1/admin/branding", authz(admin(http.HandlerFunc(s.handlePutBranding))))
+
+	// C5.1 tenant monthly budget (design/83): the status read is
+	// tenant-scoped in-handler (approval-policy pattern), the budget line
+	// write is a platform_admin exclusive.
+	mux.Handle("GET /v1/admin/tenants/{tenantID}/budget-status", authz(admin(http.HandlerFunc(s.handleGetBudgetStatus))))
+	mux.Handle("PUT /v1/admin/tenants/{tenantID}/budget", authz(admin(http.HandlerFunc(s.handlePutBudget))))
 
 	mux.Handle("POST /v1/admin/agent-keys", authz(admin(http.HandlerFunc(s.handleIssueKey))))
 	mux.Handle("GET /v1/admin/agent-keys", authz(admin(http.HandlerFunc(s.handleListKeys))))

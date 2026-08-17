@@ -40,12 +40,18 @@ type UserStore interface {
 }
 
 // Handler serves the admin auth endpoints (design/80 B-01, design/33
-// 3.1.1): POST /v1/admin/auth/login and POST /v1/admin/auth/logout.
+// 3.1.1): POST /v1/admin/auth/login, POST /v1/admin/auth/logout, plus
+// the OIDC authorization code endpoints when OIDC is wired (design/83
+// C4.1; see oidc.go). A nil OIDC keeps the OIDC endpoints answering 404.
 type Handler struct {
 	users      UserStore
 	sessions   SessionStore
 	sessionTTL time.Duration
 	now        func() time.Time
+
+	// OIDC serves GET /v1/admin/auth/oidc/start and .../oidc/callback.
+	// nil = OIDC disabled, the endpoints answer 404 code 10004.
+	OIDC *OIDCHandler
 }
 
 // NewHandler builds the auth handler; the session TTL defaults to
@@ -64,6 +70,13 @@ func (h *Handler) Routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /v1/admin/auth/login", h.handleLogin)
 	mux.HandleFunc("POST /v1/admin/auth/logout", h.handleLogout)
+	if h.OIDC == nil {
+		mux.HandleFunc("GET /v1/admin/auth/oidc/start", handleOIDCDisabled)
+		mux.HandleFunc("GET /v1/admin/auth/oidc/callback", handleOIDCDisabled)
+	} else {
+		mux.HandleFunc("GET /v1/admin/auth/oidc/start", h.OIDC.handleStart)
+		mux.HandleFunc("GET /v1/admin/auth/oidc/callback", h.OIDC.handleCallback)
+	}
 	return mux
 }
 

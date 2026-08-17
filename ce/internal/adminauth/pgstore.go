@@ -54,21 +54,56 @@ func (s *PGUserStore) GetByUsername(ctx context.Context, username string) (*User
 	if err != nil {
 		return nil, err
 	}
+	if err := s.loadRoles(ctx, &u); err != nil {
+		return nil, err
+	}
+	return &u, nil
+}
+
+// GetBySubject loads the OIDC-mapped user for a subject claim
+// (design/83 C4.1). design/32 has no dedicated subject column, so the
+// subject lives in metadata.oidc_subject (written by the provisioner)
+// and the lookup is scoped to auth_source='OIDC': a LOCAL user row can
+// never be hijacked by a foreign IdP subject.
+func (s *PGUserStore) GetBySubject(ctx context.Context, subject string) (*User, error) {
+	var u User
+	err := s.pool.QueryRow(ctx, `
+		SELECT id::text, username, COALESCE(password_hash, ''), tenant_id::text, status
+		  FROM adc_users
+		 WHERE auth_source = 'OIDC'
+		   AND metadata->>'oidc_subject' = $1
+		   AND deleted_at IS NULL`, subject).
+		Scan(&u.ID, &u.Username, &u.PasswordHash, &u.TenantID, &u.Status)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrUserNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	if err := s.loadRoles(ctx, &u); err != nil {
+		return nil, err
+	}
+	return &u, nil
+}
+
+// loadRoles fills u.Roles from adc_user_roles/adc_roles, normalizing
+// role codes to lowercase (see the package comment).
+func (s *PGUserStore) loadRoles(ctx context.Context, u *User) error {
 	rows, err := s.pool.Query(ctx, `
 		SELECT r.role_code
 		  FROM adc_user_roles ur
 		  JOIN adc_roles r ON r.id = ur.role_id
 		 WHERE ur.user_id = $1::uuid`, u.ID)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	defer rows.Close()
 	for rows.Next() {
 		var role string
 		if err := rows.Scan(&role); err != nil {
-			return nil, err
+			return err
 		}
 		u.Roles = append(u.Roles, strings.ToLower(role))
 	}
-	return &u, rows.Err()
+	return rows.Err()
 }

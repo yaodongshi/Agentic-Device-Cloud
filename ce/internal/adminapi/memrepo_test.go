@@ -72,14 +72,41 @@ type memTenantRepo struct {
 	mu          sync.Mutex
 	tenants     map[string]*Tenant
 	byCode      map[string]string
+	meta        map[string]map[string]any
 	deviceCount func(tenantID string) int
 	keyCount    func(tenantID string) int
 	nextID      int
 	now         func() time.Time
 }
 
+// --- budget usage (C5.1) ---
+
+// memBudgetUsageRepo is the in-memory BudgetUsageRepo for handler tests:
+// the current-month fee per tenant is seeded by tests and answers 0
+// otherwise.
+type memBudgetUsageRepo struct {
+	mu  sync.Mutex
+	fee map[string]int64
+}
+
+func newMemBudgetUsageRepo() *memBudgetUsageRepo {
+	return &memBudgetUsageRepo{fee: map[string]int64{}}
+}
+
+func (m *memBudgetUsageRepo) setFee(tenantID string, fen int64) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.fee[tenantID] = fen
+}
+
+func (m *memBudgetUsageRepo) CurrentMonthFeeFen(_ context.Context, tenantID string) (int64, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.fee[tenantID], nil
+}
+
 func newMemTenantRepo() *memTenantRepo {
-	return &memTenantRepo{tenants: map[string]*Tenant{}, byCode: map[string]string{}, now: time.Now}
+	return &memTenantRepo{tenants: map[string]*Tenant{}, byCode: map[string]string{}, meta: map[string]map[string]any{}, now: time.Now}
 }
 
 func cloneTenant(t *Tenant) *Tenant {
@@ -88,6 +115,54 @@ func cloneTenant(t *Tenant) *Tenant {
 	}
 	cp := *t
 	return &cp
+}
+
+func cloneMeta(m map[string]any) map[string]any {
+	if m == nil {
+		return nil
+	}
+	out := make(map[string]any, len(m))
+	for k, v := range m {
+		out[k] = v
+	}
+	return out
+}
+
+// GetMeta mirrors pgTenantRepo.GetMeta: nil for a tenant without a
+// metadata document, ErrTenantNotFound for an unknown tenant.
+func (r *memTenantRepo) GetMeta(ctx context.Context, tenantID string) (map[string]any, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, ok := r.tenants[tenantID]; !ok {
+		return nil, ErrTenantNotFound
+	}
+	return cloneMeta(r.meta[tenantID]), nil
+}
+
+// SetMeta merges keys into the tenant metadata document (nil value
+// removes the key) and returns the merged document.
+func (r *memTenantRepo) SetMeta(ctx context.Context, tenantID string, kv map[string]any) (map[string]any, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, ok := r.tenants[tenantID]; !ok {
+		return nil, ErrTenantNotFound
+	}
+	doc := r.meta[tenantID]
+	if doc == nil {
+		doc = map[string]any{}
+	}
+	for k, v := range kv {
+		if v == nil {
+			delete(doc, k)
+			continue
+		}
+		doc[k] = v
+	}
+	if len(doc) == 0 {
+		doc = nil
+	}
+	r.meta[tenantID] = doc
+	return cloneMeta(doc), nil
 }
 
 func (r *memTenantRepo) Create(ctx context.Context, t *Tenant) (*Tenant, error) {
@@ -916,6 +991,7 @@ type testEnv struct {
 	store    *memStore
 	sessions *memSessions
 	audit    *memAudit
+	budget   *memBudgetUsageRepo
 	srv      *Server
 	handler  http.Handler
 }
@@ -932,9 +1008,12 @@ func newTestEnv(t *testing.T) *testEnv {
 	srv.Policies = st.policies
 	srv.ImportJobs = st.importJobs
 	srv.Groups = st.groups
+	srv.BudgetUsage = newMemBudgetUsageRepo()
 	srv.KEK = testKEK
 	srv.Now = func() time.Time { return fixedNow }
-	return &testEnv{store: st, sessions: sess, audit: aud, srv: srv, handler: srv.Handler()}
+	env := &testEnv{store: st, sessions: sess, audit: aud, srv: srv, handler: srv.Handler()}
+	env.budget = srv.BudgetUsage.(*memBudgetUsageRepo)
+	return env
 }
 
 // token issues a session for the given roles and tenant, returning the

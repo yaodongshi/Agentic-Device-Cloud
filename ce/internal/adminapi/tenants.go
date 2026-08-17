@@ -120,6 +120,14 @@ type TenantRepo interface {
 	Get(ctx context.Context, tenantID string) (*Tenant, error)
 	Update(ctx context.Context, tenantID string, t *Tenant) (*Tenant, error)
 	List(ctx context.Context, f TenantFilter, p Page) ([]Tenant, int, error)
+	// GetMeta returns the tenant's raw metadata JSONB document (nil when
+	// the row carries no metadata). SetMeta merges the given keys into
+	// the document — a nil value removes the key — and returns the
+	// merged document. Both answer ErrTenantNotFound for unknown
+	// tenants. The white-label branding (C2.1) and the monthly budget
+	// line (C5.1) live in metadata (design/83).
+	GetMeta(ctx context.Context, tenantID string) (map[string]any, error)
+	SetMeta(ctx context.Context, tenantID string, kv map[string]any) (map[string]any, error)
 }
 
 // ---------------------------------------------------------------------------
@@ -510,7 +518,10 @@ func (r *pgTenantRepo) Get(ctx context.Context, tenantID string) (*Tenant, error
 // Update replaces quota and status in one conditional UPDATE. The
 // used_devices/used_calls_month guards keep quota above usage atomically
 // (design/32 6.2 ledger semantics); a zero-row update is re-read and
-// classified.
+// classified. The metadata JSONB is merged (metadata || $5), never
+// replaced, so sibling keys written by other repos — approval_policy,
+// alert_rules, branding (C2.1) and the budget line (C5.1) — survive a
+// quota change (policies.go merge discipline).
 func (r *pgTenantRepo) Update(ctx context.Context, tenantID string, t *Tenant) (*Tenant, error) {
 	meta, err := json.Marshal(tenantMeta{
 		MaxAgentKeys:       t.Quota.MaxAgentKeys,
@@ -521,7 +532,7 @@ func (r *pgTenantRepo) Update(ctx context.Context, tenantID string, t *Tenant) (
 	}
 	row := r.pool.QueryRow(ctx, `UPDATE adc_tenants
 		SET quota_devices = $2, quota_calls_monthly = $3, status = $4,
-		    metadata = $5, updated_at = now()
+		    metadata = COALESCE(metadata, '{}'::jsonb) || $5::jsonb, updated_at = now()
 		WHERE id = $1::uuid AND deleted_at IS NULL
 		  AND used_devices <= $2 AND used_calls_month <= $3
 		RETURNING `+tenantCols,
@@ -541,6 +552,62 @@ func (r *pgTenantRepo) Update(ctx context.Context, tenantID string, t *Tenant) (
 		return nil, ErrTenantQuotaBelowUsage
 	}
 	return nil, ErrTenantNotFound
+}
+
+// GetMeta returns the tenant's raw metadata document (empty map when the
+// column holds no JSON); unknown tenants answer ErrTenantNotFound.
+func (r *pgTenantRepo) GetMeta(ctx context.Context, tenantID string) (map[string]any, error) {
+	var raw []byte
+	err := r.pool.QueryRow(ctx, `SELECT COALESCE(metadata, '{}'::jsonb)
+		FROM adc_tenants WHERE id = $1::uuid AND deleted_at IS NULL`, tenantID).Scan(&raw)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrTenantNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	meta := map[string]any{}
+	if err := json.Unmarshal(raw, &meta); err != nil {
+		return nil, err
+	}
+	return meta, nil
+}
+
+// SetMeta merges the given keys into the tenant metadata document
+// (JSONB ||, never a replace — the policies.go merge discipline); a nil
+// value removes the key via the jsonb minus operator. Returns the merged
+// document; unknown tenants answer ErrTenantNotFound.
+func (r *pgTenantRepo) SetMeta(ctx context.Context, tenantID string, kv map[string]any) (map[string]any, error) {
+	setDoc := map[string]any{}
+	removeKeys := make([]string, 0)
+	for k, v := range kv {
+		if v == nil {
+			removeKeys = append(removeKeys, k)
+			continue
+		}
+		setDoc[k] = v
+	}
+	payload, err := json.Marshal(setDoc)
+	if err != nil {
+		return nil, err
+	}
+	var raw []byte
+	err = r.pool.QueryRow(ctx, `UPDATE adc_tenants
+		SET metadata = COALESCE(metadata, '{}'::jsonb) || $2::jsonb - $3,
+		    updated_at = now()
+		WHERE id = $1::uuid AND deleted_at IS NULL
+		RETURNING metadata`, tenantID, string(payload), removeKeys).Scan(&raw)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrTenantNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	meta := map[string]any{}
+	if err := json.Unmarshal(raw, &meta); err != nil {
+		return nil, err
+	}
+	return meta, nil
 }
 
 // List pages tenants with per-row device/key counts and the window total
