@@ -100,12 +100,13 @@ func TestPassAuthSnapshotsCredentialHeadersVerbatim(t *testing.T) {
 		out := make(http.Header)
 		applyAuthHeaders(r.Context(), out)
 		for name, want := range map[string]string{
-			"Authorization":   "Bearer adc_live_abc",
-			"X-ADC-Key":       "adc_xyz_secret",
-			"Cookie":          "adc_session=session-1",
-			"X-Device-ID":     "dev-001",
-			"X-Device-Model":  "T-800",
-			"X-ADC-Signature": "deadbeef",
+			"Authorization":                "Bearer adc_live_abc",
+			"X-ADC-Key":                    "adc_xyz_secret",
+			"X-ADC-Application-Credential": "adc_app_once",
+			"Cookie":                       "adc_session=session-1",
+			"X-Device-ID":                  "dev-001",
+			"X-Device-Model":               "T-800",
+			"X-ADC-Signature":              "deadbeef",
 		} {
 			if got := out.Get(name); got != want {
 				t.Errorf("re-applied header %s = %q, want %q", name, got, want)
@@ -115,6 +116,7 @@ func TestPassAuthSnapshotsCredentialHeadersVerbatim(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/x", nil)
 	req.Header.Set("Authorization", "Bearer adc_live_abc")
 	req.Header.Set("X-ADC-Key", "adc_xyz_secret")
+	req.Header.Set("X-ADC-Application-Credential", "adc_app_once")
 	req.Header.Add("Cookie", "adc_session=session-1")
 	req.Header.Set("X-Device-ID", "dev-001")
 	req.Header.Set("X-Device-Model", "T-800")

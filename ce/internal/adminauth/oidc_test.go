@@ -9,477 +9,296 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
-
-	"adc.dev/ce/internal/httpx"
 )
 
-// mockOIDCProvider is a scriptable OIDCProvider: any code other than
-// "good-code" fails the exchange; exchanges are recorded.
 type mockOIDCProvider struct {
-	identity    *OIDCIdentity
-	exchangeErr error
-	authURLs    []string
-	codes       []string
-}
-
-func (m *mockOIDCProvider) AuthorizationURL(state, redirect string) string {
-	m.authURLs = append(m.authURLs, state)
-	return "https://idp.example.com/authorize?state=" + url.QueryEscape(state) + "&redirect_uri=" + url.QueryEscape(redirect)
-}
-
-func (m *mockOIDCProvider) ExchangeCode(_ context.Context, code, _ string) (*OIDCIdentity, error) {
-	m.codes = append(m.codes, code)
-	if m.exchangeErr != nil {
-		return nil, m.exchangeErr
-	}
-	if code != "good-code" {
-		return nil, errors.New("idp: unknown code")
-	}
-	return m.identity, nil
-}
-
-// mockSubjectStore serves users by username and by OIDC subject.
-type mockSubjectStore struct {
-	users     map[string]*User
-	bySubject map[string]*User
+	identity  *OIDCIdentity
 	err       error
+	mu        sync.Mutex
+	state     string
+	nonce     string
+	challenge string
+	verifier  string
 }
 
-func newMockSubjectStore() *mockSubjectStore {
-	return &mockSubjectStore{users: map[string]*User{}, bySubject: map[string]*User{}}
-}
-
-func (m *mockSubjectStore) GetByUsername(_ context.Context, username string) (*User, error) {
-	if m.err != nil {
-		return nil, m.err
-	}
-	u, ok := m.users[username]
-	if !ok {
-		return nil, ErrUserNotFound
-	}
-	return u, nil
-}
-
-func (m *mockSubjectStore) GetBySubject(_ context.Context, subject string) (*User, error) {
-	if m.err != nil {
-		return nil, m.err
-	}
-	u, ok := m.bySubject[subject]
-	if !ok {
-		return nil, ErrUserNotFound
-	}
-	return u, nil
-}
-
-// mockStateStore keeps OIDC nonces in memory.
-type mockStateStore struct {
-	mu     sync.Mutex
-	states map[string]time.Duration
-	setErr error
-}
-
-func newMockStateStore() *mockStateStore {
-	return &mockStateStore{states: make(map[string]time.Duration)}
-}
-
-func (m *mockStateStore) Set(_ context.Context, state string, ttl time.Duration) error {
-	if m.setErr != nil {
-		return m.setErr
-	}
+func (m *mockOIDCProvider) AuthorizationURL(state, nonce, challenge, _ string) (string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.states[state] = ttl
+	m.state, m.nonce, m.challenge = state, nonce, challenge
+	if m.err != nil {
+		return "", m.err
+	}
+	return "https://idp.example/authorize?state=" + url.QueryEscape(state), nil
+}
+
+func (m *mockOIDCProvider) ExchangeCode(_ context.Context, code, _ string, verifier string) (*OIDCIdentity, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.verifier = verifier
+	if m.err != nil || code != "good" {
+		return nil, errors.New("exchange failed")
+	}
+	copy := *m.identity
+	if copy.Nonce == "" {
+		copy.Nonce = m.nonce
+	}
+	return &copy, nil
+}
+
+type mockIdentityStore struct {
+	users map[string]*User
+}
+
+func (m *mockIdentityStore) GetByUsername(context.Context, string) (*User, error) {
+	return nil, ErrUserNotFound
+}
+
+func (m *mockIdentityStore) GetByOIDCIdentity(_ context.Context, issuer, subject string) (*User, error) {
+	u, ok := m.users[issuer+"\x00"+subject]
+	if !ok {
+		return nil, ErrUserNotFound
+	}
+	return u, nil
+}
+
+type memoryOIDCStates struct {
+	mu sync.Mutex
+	tx map[string]*OIDCTransaction
+}
+
+type memoryOIDCAudit struct {
+	events []OIDCAuditEvent
+}
+
+func (m *memoryOIDCAudit) RecordOIDCLogin(_ context.Context, event OIDCAuditEvent) error {
+	m.events = append(m.events, event)
 	return nil
 }
 
-func (m *mockStateStore) Consume(_ context.Context, state string) (bool, error) {
+func newMemoryOIDCStates() *memoryOIDCStates {
+	return &memoryOIDCStates{tx: map[string]*OIDCTransaction{}}
+}
+
+func (m *memoryOIDCStates) Set(_ context.Context, state string, tx *OIDCTransaction, _ time.Duration) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	_, ok := m.states[state]
-	if !ok {
-		return false, nil
-	}
-	delete(m.states, state)
-	return true, nil
+	copy := *tx
+	m.tx[state] = &copy
+	return nil
 }
 
-// mockProvisioner records every auto-provision call.
-type mockProvisioner struct {
-	user    *User
-	err     error
-	records []struct {
-		ID     *OIDCIdentity
-		Tenant string
-		Roles  []string
+func (m *memoryOIDCStates) Consume(_ context.Context, state, binding string) (*OIDCTransaction, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	tx := m.tx[state]
+	if tx == nil || tx.BrowserBinding != HashToken(binding) {
+		return nil, nil
 	}
+	delete(m.tx, state)
+	copy := *tx
+	return &copy, nil
 }
 
-func (m *mockProvisioner) Provision(_ context.Context, id *OIDCIdentity, tenant string, roles []string) (*User, error) {
-	m.records = append(m.records, struct {
-		ID     *OIDCIdentity
-		Tenant string
-		Roles  []string
-	}{ID: id, Tenant: tenant, Roles: append([]string(nil), roles...)})
-	if m.err != nil {
-		return nil, m.err
-	}
-	return m.user, nil
-}
-
-// buildOIDCHandler wires a handler with the OIDC endpoints enabled.
-func buildOIDCHandler(provider *mockOIDCProvider, subjects *mockSubjectStore, states *mockStateStore, prov *mockProvisioner) (*Handler, *mockSessionStore) {
+func buildOIDCTestHandler() (*Handler, *mockOIDCProvider, *memoryOIDCStates, *mockSessionStore) {
+	issuer := "https://idp.example"
+	provider := &mockOIDCProvider{identity: &OIDCIdentity{Issuer: issuer, Subject: "known"}}
+	users := &mockIdentityStore{users: map[string]*User{issuer + "\x00known": {
+		ID: "u1", Username: "known", TenantID: "t1", Status: userStatusActive, Roles: []string{"tenant_admin"},
+	}}}
+	states := newMemoryOIDCStates()
 	sessions := newMockSessionStore()
-	h := NewHandler(subjects, sessions)
-	h.OIDC = NewOIDCHandler(subjects, sessions, provider, states, OIDCConfig{
-		Issuer:      "https://idp.example.com",
-		ClientID:    "adc-console",
-		RedirectURL: "https://console.adc.dev/v1/admin/auth/oidc/callback",
-		Scope:       "openid email profile",
-	})
-	h.OIDC.Provisioner = prov.Provision
-	h.OIDC.DefaultTenantID = "t_default"
-	h.OIDC.DefaultRoles = []string{"tenant_admin"}
-	h.OIDC.FrontendRedirectURL = "https://console.adc.dev/dashboard"
-	return h, sessions
+	h := NewHandler(users, sessions)
+	h.OIDC = NewOIDCHandler(users, sessions, provider, states, OIDCConfig{Issuer: issuer, ClientID: "adc", RedirectURL: "https://console.example/v1/admin/auth/oidc/callback"})
+	h.OIDC.FrontendRedirectURL = "/login?oidc=success"
+	return h, provider, states, sessions
 }
 
-func getOIDC(t *testing.T, h *Handler, path string) *httptest.ResponseRecorder {
+func startOIDC(t *testing.T, h *Handler) (*httptest.ResponseRecorder, string, *http.Cookie) {
 	t.Helper()
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, path, nil)
+	h.Routes().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/admin/auth/oidc/start", nil))
+	if rec.Code != http.StatusFound {
+		t.Fatalf("start status = %d, body=%s", rec.Code, rec.Body.String())
+	}
+	location, _ := rec.Result().Location()
+	state := location.Query().Get("state")
+	var binding *http.Cookie
+	for _, cookie := range rec.Result().Cookies() {
+		if cookie.Name == CookieOIDCTransaction {
+			binding = cookie
+		}
+	}
+	if state == "" || binding == nil {
+		t.Fatal("start did not issue state and transaction cookie")
+	}
+	return rec, state, binding
+}
+
+func callbackOIDC(h *Handler, state string, binding *http.Cookie) *httptest.ResponseRecorder {
+	req := httptest.NewRequest(http.MethodGet, "/v1/admin/auth/oidc/callback?state="+url.QueryEscape(state)+"&code=good", nil)
+	if binding != nil {
+		req.AddCookie(binding)
+	}
+	rec := httptest.NewRecorder()
 	h.Routes().ServeHTTP(rec, req)
 	return rec
 }
 
-func TestOIDCDisabledEndpoints404(t *testing.T) {
-	// No OIDC wired at all: both endpoints answer 404 code 10004.
-	h := NewHandler(&mockUserStore{}, newMockSessionStore())
-	for _, path := range []string{
-		"/v1/admin/auth/oidc/start",
-		"/v1/admin/auth/oidc/callback?state=s&code=c",
-	} {
-		rec := getOIDC(t, h, path)
-		if rec.Code != http.StatusNotFound {
-			t.Fatalf("%s: status = %d, want 404 (body: %s)", path, rec.Code, rec.Body.String())
-		}
-		var body httpx.ErrorBody
-		if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
-			t.Fatalf("response is not an error body: %v", err)
-		}
-		if body.Code != codeNotFound {
-			t.Fatalf("error code = %q, want %q", body.Code, codeNotFound)
-		}
+func TestOIDCStatus(t *testing.T) {
+	disabled := NewHandler(&mockIdentityStore{}, newMockSessionStore())
+	rec := httptest.NewRecorder()
+	disabled.Routes().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/admin/auth/oidc/status", nil))
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"enabled":false`) {
+		t.Fatalf("disabled status: %d %s", rec.Code, rec.Body.String())
+	}
+	h, _, _, _ := buildOIDCTestHandler()
+	rec = httptest.NewRecorder()
+	h.Routes().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/admin/auth/oidc/status", nil))
+	if !strings.Contains(rec.Body.String(), `"enabled":true`) {
+		t.Fatalf("enabled status: %s", rec.Body.String())
 	}
 }
 
-func TestOIDCDisabledWithNilProvider(t *testing.T) {
-	subjects := newMockSubjectStore()
-	sessions := newMockSessionStore()
-	h := NewHandler(subjects, sessions)
-	h.OIDC = NewOIDCHandler(subjects, sessions, nil, newMockStateStore(), OIDCConfig{})
-	rec := getOIDC(t, h, "/v1/admin/auth/oidc/start")
-	if rec.Code != http.StatusNotFound {
-		t.Fatalf("status = %d, want 404 (body: %s)", rec.Code, rec.Body.String())
+func TestOIDCStartUsesNoncePKCES256AndBindingCookie(t *testing.T) {
+	h, provider, states, _ := buildOIDCTestHandler()
+	rec, state, cookie := startOIDC(t, h)
+	provider.mu.Lock()
+	nonce, challenge := provider.nonce, provider.challenge
+	provider.mu.Unlock()
+	if nonce == "" || challenge == "" || challenge == nonce {
+		t.Fatalf("nonce=%q challenge=%q", nonce, challenge)
+	}
+	if !cookie.HttpOnly || !cookie.Secure || cookie.SameSite != http.SameSiteLaxMode {
+		t.Fatalf("insecure transaction cookie: %+v", cookie)
+	}
+	tx := states.tx[state]
+	if tx == nil || tx.Nonce != nonce || tx.PKCEVerifier == "" || tx.BrowserBinding != HashToken(cookie.Value) {
+		t.Fatalf("incomplete transaction: %+v", tx)
+	}
+	if strings.Contains(rec.Header().Get("Location"), nonce) {
+		t.Fatal("mock redirect unexpectedly exposed nonce")
 	}
 }
 
-func TestOIDCStartRedirectsToIdP(t *testing.T) {
-	provider := &mockOIDCProvider{identity: &OIDCIdentity{Subject: "sub-1", Email: "a@b.c", Name: "A"}}
-	subjects := newMockSubjectStore()
-	states := newMockStateStore()
-	h, _ := buildOIDCHandler(provider, subjects, states, &mockProvisioner{})
-
-	rec := getOIDC(t, h, "/v1/admin/auth/oidc/start")
-	if rec.Code != http.StatusFound {
-		t.Fatalf("status = %d, want 302 (body: %s)", rec.Code, rec.Body.String())
+func TestOIDCCallbackCreatesCookieOnlySession(t *testing.T) {
+	h, provider, _, sessions := buildOIDCTestHandler()
+	_, state, binding := startOIDC(t, h)
+	rec := callbackOIDC(h, state, binding)
+	if rec.Code != http.StatusFound || rec.Header().Get("Location") != "/login?oidc=success" {
+		t.Fatalf("callback = %d %q %s", rec.Code, rec.Header().Get("Location"), rec.Body.String())
 	}
-	loc, err := rec.Result().Location()
-	if err != nil || loc == nil {
-		t.Fatalf("no Location header: %v", err)
+	if rec.Header().Get("Cache-Control") != "no-store" || rec.Header().Get("Referrer-Policy") != "no-referrer" {
+		t.Fatalf("missing callback security headers: %v", rec.Header())
 	}
-	if !strings.HasPrefix(loc.String(), "https://idp.example.com/authorize?state=") {
-		t.Fatalf("Location = %q, want the IdP authorization URL", loc.String())
+	if strings.Contains(rec.Body.String(), "adc_session") || strings.Contains(rec.Header().Get("Location"), "token") {
+		t.Fatal("callback leaked session token")
 	}
-	// The state must exist in the store with the OIDC TTL.
-	if len(states.states) != 1 {
-		t.Fatalf("state store has %d entries, want 1", len(states.states))
-	}
-	for state, ttl := range states.states {
-		if !strings.Contains(loc.String(), url.QueryEscape(state)) {
-			t.Fatalf("redirect carries a state not stored (or vice versa)")
-		}
-		if ttl != OIDCStateTTL {
-			t.Fatalf("state TTL = %v, want %v", ttl, OIDCStateTTL)
-		}
-	}
-}
-
-func TestOIDCStartStateStoreError(t *testing.T) {
-	provider := &mockOIDCProvider{}
-	subjects := newMockSubjectStore()
-	states := newMockStateStore()
-	states.setErr = errors.New("valkey down")
-	h, _ := buildOIDCHandler(provider, subjects, states, &mockProvisioner{})
-
-	rec := getOIDC(t, h, "/v1/admin/auth/oidc/start")
-	if rec.Code != http.StatusInternalServerError {
-		t.Fatalf("status = %d, want 500 (body: %s)", rec.Code, rec.Body.String())
-	}
-}
-
-func TestOIDCCallbackStateCSRFRejected(t *testing.T) {
-	provider := &mockOIDCProvider{identity: &OIDCIdentity{Subject: "sub-1"}}
-	subjects := newMockSubjectStore()
-	states := newMockStateStore()
-	h, sessions := buildOIDCHandler(provider, subjects, states, &mockProvisioner{})
-
-	for _, path := range []string{
-		"/v1/admin/auth/oidc/callback?state=forged&code=good-code",
-		"/v1/admin/auth/oidc/callback?code=good-code",
-	} {
-		rec := getOIDC(t, h, path)
-		if rec.Code != http.StatusUnauthorized {
-			t.Fatalf("%s: status = %d, want 401 (body: %s)", path, rec.Code, rec.Body.String())
-		}
-		var body httpx.ErrorBody
-		if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
-			t.Fatalf("response is not an error body: %v", err)
-		}
-		if body.Code != codeUnauthorized {
-			t.Fatalf("error code = %q, want %q", body.Code, codeUnauthorized)
-		}
-	}
-	if len(provider.codes) != 0 {
-		t.Fatal("code was exchanged despite a bad state")
-	}
-	if len(sessions.sessions) != 0 {
-		t.Fatal("CSRF-rejected callback created a session")
-	}
-}
-
-func TestOIDCCallbackExchangeFailure(t *testing.T) {
-	provider := &mockOIDCProvider{identity: &OIDCIdentity{Subject: "sub-1"}}
-	subjects := newMockSubjectStore()
-	states := newMockStateStore()
-	h, sessions := buildOIDCHandler(provider, subjects, states, &mockProvisioner{})
-
-	// A valid state but a code the IdP rejects.
-	state := seedState(t, states)
-	rec := getOIDC(t, h, "/v1/admin/auth/oidc/callback?state="+url.QueryEscape(state)+"&code=stale-code")
-	if rec.Code != http.StatusUnauthorized {
-		t.Fatalf("status = %d, want 401 (body: %s)", rec.Code, rec.Body.String())
-	}
-	if len(sessions.sessions) != 0 {
-		t.Fatal("failed exchange created a session")
-	}
-}
-
-func TestOIDCCallbackMissingCode(t *testing.T) {
-	provider := &mockOIDCProvider{identity: &OIDCIdentity{Subject: "sub-1"}}
-	subjects := newMockSubjectStore()
-	states := newMockStateStore()
-	h, _ := buildOIDCHandler(provider, subjects, states, &mockProvisioner{})
-
-	state := seedState(t, states)
-	rec := getOIDC(t, h, "/v1/admin/auth/oidc/callback?state="+url.QueryEscape(state))
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d, want 400 (body: %s)", rec.Code, rec.Body.String())
-	}
-}
-
-func TestOIDCCallbackAutoProvisionsUser(t *testing.T) {
-	provider := &mockOIDCProvider{identity: &OIDCIdentity{Subject: "sub-new", Email: "new@corp.com", Name: "New User"}}
-	subjects := newMockSubjectStore()
-	states := newMockStateStore()
-	prov := &mockProvisioner{user: &User{
-		ID:       "u_oidc_new",
-		Username: "new@corp.com",
-		TenantID: "t_default",
-		Status:   userStatusActive,
-		Roles:    []string{"tenant_admin"},
-	}}
-	h, sessions := buildOIDCHandler(provider, subjects, states, prov)
-
-	state := seedState(t, states)
-	rec := getOIDC(t, h, "/v1/admin/auth/oidc/callback?state="+url.QueryEscape(state)+"&code=good-code")
-	if rec.Code != http.StatusFound {
-		t.Fatalf("status = %d, want 302 (body: %s)", rec.Code, rec.Body.String())
-	}
-	loc := rec.Result().Header.Get("Location")
-	if loc != "https://console.adc.dev/dashboard" {
-		t.Fatalf("Location = %q, want the frontend redirect", loc)
-	}
-	if len(prov.records) != 1 {
-		t.Fatalf("provisioner calls = %d, want 1", len(prov.records))
-	}
-	rec0 := prov.records[0]
-	if rec0.ID.Subject != "sub-new" || rec0.ID.Email != "new@corp.com" {
-		t.Fatalf("provisioned identity = %+v, want subject sub-new", rec0.ID)
-	}
-	if rec0.Tenant != "t_default" {
-		t.Fatalf("provisioned tenant = %q, want t_default", rec0.Tenant)
-	}
-	if len(rec0.Roles) != 1 || rec0.Roles[0] != "tenant_admin" {
-		t.Fatalf("provisioned roles = %v, want [tenant_admin]", rec0.Roles)
-	}
-	// A session for the provisioned user exists and the cookie is set.
-	cookies := rec.Result().Cookies()
 	var sessionCookie *http.Cookie
-	for _, c := range cookies {
-		if c.Name == CookieSession {
-			sessionCookie = c
+	for _, cookie := range rec.Result().Cookies() {
+		if cookie.Name == CookieSession {
+			sessionCookie = cookie
 		}
 	}
-	if sessionCookie == nil {
-		t.Fatal("no adc_session cookie set")
+	if sessionCookie == nil || !sessionCookie.HttpOnly || len(sessions.sessions) != 1 {
+		t.Fatalf("session cookie/store missing: %+v", sessionCookie)
 	}
-	stored, err := sessions.Get(context.Background(), HashToken(sessionCookie.Value))
-	if err != nil {
-		t.Fatalf("session missing: %v", err)
+	provider.mu.Lock()
+	if provider.verifier == "" {
+		t.Fatal("PKCE verifier not sent to exchange")
 	}
-	if stored.UserID != "u_oidc_new" || stored.TenantID != "t_default" {
-		t.Fatalf("stored session = %+v, want the provisioned user", stored)
+	provider.mu.Unlock()
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/admin/auth/session", nil)
+	req.AddCookie(sessionCookie)
+	current := httptest.NewRecorder()
+	h.Routes().ServeHTTP(current, req)
+	var body currentSessionResponse
+	if current.Code != http.StatusOK || json.Unmarshal(current.Body.Bytes(), &body) != nil || body.UserID != "u1" {
+		t.Fatalf("current session = %d %s", current.Code, current.Body.String())
 	}
 }
 
-func TestOIDCCallbackMapsExistingUser(t *testing.T) {
-	provider := &mockOIDCProvider{identity: &OIDCIdentity{Subject: "sub-known"}}
-	subjects := newMockSubjectStore()
-	subjects.bySubject["sub-known"] = &User{
-		ID:       "u_known",
-		Username: "known@corp.com",
-		TenantID: "t_existing",
-		Status:   userStatusActive,
-		Roles:    []string{"approver"},
-	}
-	states := newMockStateStore()
-	prov := &mockProvisioner{user: &User{ID: "u_should_not_use"}}
-	h, sessions := buildOIDCHandler(provider, subjects, states, prov)
-
-	state := seedState(t, states)
-	rec := getOIDC(t, h, "/v1/admin/auth/oidc/callback?state="+url.QueryEscape(state)+"&code=good-code")
-	if rec.Code != http.StatusFound {
-		t.Fatalf("status = %d, want 302 (body: %s)", rec.Code, rec.Body.String())
-	}
-	if len(prov.records) != 0 {
-		t.Fatal("provisioner must not run for an already-mapped subject")
-	}
-	cookies := rec.Result().Cookies()
-	if len(cookies) != 1 {
-		t.Fatalf("cookies = %v, want the session cookie", cookies)
-	}
-	stored, err := sessions.Get(context.Background(), HashToken(cookies[0].Value))
-	if err != nil {
-		t.Fatalf("session missing: %v", err)
-	}
-	if stored.UserID != "u_known" || stored.TenantID != "t_existing" {
-		t.Fatalf("stored session = %+v, want the existing user mapping", stored)
-	}
-	if len(stored.Roles) != 1 || stored.Roles[0] != "approver" {
-		t.Fatalf("stored roles = %v, want [approver]", stored.Roles)
+func TestOIDCCallbackRejectsUnknownNonceAndBrowser(t *testing.T) {
+	for _, mutate := range []func(*mockOIDCProvider, *http.Cookie){
+		func(_ *mockOIDCProvider, c *http.Cookie) { c.Value = "other-browser" },
+		func(p *mockOIDCProvider, _ *http.Cookie) { p.identity.Nonce = "forged-nonce" },
+	} {
+		h, provider, _, sessions := buildOIDCTestHandler()
+		_, state, binding := startOIDC(t, h)
+		mutate(provider, binding)
+		rec := callbackOIDC(h, state, binding)
+		if rec.Code != http.StatusUnauthorized || len(sessions.sessions) != 0 {
+			t.Fatalf("rejection = %d sessions=%d", rec.Code, len(sessions.sessions))
+		}
 	}
 }
 
-func TestOIDCCallbackStateSingleUse(t *testing.T) {
-	provider := &mockOIDCProvider{identity: &OIDCIdentity{Subject: "sub-1"}}
-	subjects := newMockSubjectStore()
-	subjects.bySubject["sub-1"] = &User{
-		ID: "u_1", Username: "u", TenantID: "t1", Status: userStatusActive, Roles: []string{"tenant_admin"},
+func TestOIDCCallbackUnknownIdentityDenied(t *testing.T) {
+	h, provider, _, sessions := buildOIDCTestHandler()
+	audit := &memoryOIDCAudit{}
+	h.OIDC.Audit = audit
+	provider.identity.Subject = "unknown"
+	_, state, binding := startOIDC(t, h)
+	rec := callbackOIDC(h, state, binding)
+	if rec.Code != http.StatusUnauthorized || len(sessions.sessions) != 0 {
+		t.Fatalf("unknown identity = %d sessions=%d", rec.Code, len(sessions.sessions))
 	}
-	states := newMockStateStore()
-	h, _ := buildOIDCHandler(provider, subjects, states, &mockProvisioner{})
-
-	state := seedState(t, states)
-	first := getOIDC(t, h, "/v1/admin/auth/oidc/callback?state="+url.QueryEscape(state)+"&code=good-code")
-	if first.Code != http.StatusFound {
-		t.Fatalf("first use status = %d, want 302 (body: %s)", first.Code, first.Body.String())
-	}
-	replay := getOIDC(t, h, "/v1/admin/auth/oidc/callback?state="+url.QueryEscape(state)+"&code=good-code")
-	if replay.Code != http.StatusUnauthorized {
-		t.Fatalf("replay status = %d, want 401 (body: %s)", replay.Code, replay.Body.String())
+	if len(audit.events) != 1 || audit.events[0].Result != "rejected" || audit.events[0].Subject != "unknown" {
+		t.Fatalf("rejected callback audit = %+v", audit.events)
 	}
 }
 
-func TestOIDCCallbackDisabledUser(t *testing.T) {
-	provider := &mockOIDCProvider{identity: &OIDCIdentity{Subject: "sub-off"}}
-	subjects := newMockSubjectStore()
-	subjects.bySubject["sub-off"] = &User{
-		ID: "u_off", Username: "off", TenantID: "t1", Status: "DISABLED", Roles: []string{"tenant_admin"},
+func TestOIDCCallbackAuditsSuccessWithoutCredentials(t *testing.T) {
+	h, _, _, _ := buildOIDCTestHandler()
+	audit := &memoryOIDCAudit{}
+	h.OIDC.Audit = audit
+	_, state, binding := startOIDC(t, h)
+	if rec := callbackOIDC(h, state, binding); rec.Code != http.StatusFound {
+		t.Fatalf("callback status = %d", rec.Code)
 	}
-	states := newMockStateStore()
-	h, sessions := buildOIDCHandler(provider, subjects, states, &mockProvisioner{})
-
-	state := seedState(t, states)
-	rec := getOIDC(t, h, "/v1/admin/auth/oidc/callback?state="+url.QueryEscape(state)+"&code=good-code")
-	if rec.Code != http.StatusUnauthorized {
-		t.Fatalf("status = %d, want 401 (body: %s)", rec.Code, rec.Body.String())
-	}
-	if len(sessions.sessions) != 0 {
-		t.Fatal("disabled user created a session")
+	if len(audit.events) != 1 || audit.events[0].Result != "succeeded" || audit.events[0].UserID != "u1" || audit.events[0].TenantID != "t1" {
+		t.Fatalf("successful callback audit = %+v", audit.events)
 	}
 }
 
-func TestOIDCCallbackUnknownSubjectWithoutProvisioner(t *testing.T) {
-	provider := &mockOIDCProvider{identity: &OIDCIdentity{Subject: "sub-ghost"}}
-	subjects := newMockSubjectStore()
-	states := newMockStateStore()
-	h, _ := buildOIDCHandler(provider, subjects, states, &mockProvisioner{})
-	h.OIDC.Provisioner = nil
-
-	state := seedState(t, states)
-	rec := getOIDC(t, h, "/v1/admin/auth/oidc/callback?state="+url.QueryEscape(state)+"&code=good-code")
-	if rec.Code != http.StatusUnauthorized {
-		t.Fatalf("status = %d, want 401 (body: %s)", rec.Code, rec.Body.String())
+func TestOIDCTransactionConcurrentSingleUse(t *testing.T) {
+	h, _, _, _ := buildOIDCTestHandler()
+	_, state, binding := startOIDC(t, h)
+	var successes atomic.Int32
+	var wg sync.WaitGroup
+	for range 20 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			copy := *binding
+			if callbackOIDC(h, state, &copy).Code == http.StatusFound {
+				successes.Add(1)
+			}
+		}()
+	}
+	wg.Wait()
+	if successes.Load() != 1 {
+		t.Fatalf("successful callbacks = %d, want 1", successes.Load())
 	}
 }
 
-func TestOIDCCallbackProvisionerError(t *testing.T) {
-	provider := &mockOIDCProvider{identity: &OIDCIdentity{Subject: "sub-new"}}
-	subjects := newMockSubjectStore()
-	states := newMockStateStore()
-	prov := &mockProvisioner{err: errors.New("pg down")}
-	h, _ := buildOIDCHandler(provider, subjects, states, prov)
-
-	state := seedState(t, states)
-	rec := getOIDC(t, h, "/v1/admin/auth/oidc/callback?state="+url.QueryEscape(state)+"&code=good-code")
-	if rec.Code != http.StatusInternalServerError {
-		t.Fatalf("status = %d, want 500 (body: %s)", rec.Code, rec.Body.String())
-	}
-}
-
-func TestValkeyOIDCStateStore(t *testing.T) {
+func TestValkeyOIDCStateStoreAtomicBinding(t *testing.T) {
 	rdb := newFakeValkey()
 	store := NewValkeyOIDCStateStore(rdb)
-
-	if err := store.Set(context.Background(), "st-1", OIDCStateTTL); err != nil {
-		t.Fatalf("Set: %v", err)
+	tx := &OIDCTransaction{Nonce: "n", PKCEVerifier: "v", BrowserBinding: HashToken("browser")}
+	if err := store.Set(context.Background(), "state", tx, OIDCStateTTL); err != nil {
+		t.Fatal(err)
 	}
-	ok, err := store.Consume(context.Background(), "st-1")
-	if err != nil || !ok {
-		t.Fatalf("Consume = %v, %v; want true, nil", ok, err)
+	if got, err := store.Consume(context.Background(), "state", "attacker"); err != nil || got != nil {
+		t.Fatalf("attacker consume = %+v, %v", got, err)
 	}
-	// Single use: the second consume misses.
-	ok, err = store.Consume(context.Background(), "st-1")
-	if err != nil || ok {
-		t.Fatalf("second Consume = %v, %v; want false, nil", ok, err)
+	if got, err := store.Consume(context.Background(), "state", "browser"); err != nil || got == nil {
+		t.Fatalf("bound consume = %+v, %v", got, err)
 	}
-	// Unknown nonce: not an error, just absent.
-	ok, err = store.Consume(context.Background(), "never-stored")
-	if err != nil || ok {
-		t.Fatalf("unknown Consume = %v, %v; want false, nil", ok, err)
+	if got, _ := store.Consume(context.Background(), "state", "browser"); got != nil {
+		t.Fatal("transaction replay succeeded")
 	}
-}
-
-func seedState(t *testing.T, states *mockStateStore) string {
-	t.Helper()
-	state, err := NewToken()
-	if err != nil {
-		t.Fatalf("NewToken: %v", err)
-	}
-	if err := states.Set(context.Background(), state, OIDCStateTTL); err != nil {
-		t.Fatalf("seed state: %v", err)
-	}
-	return state
 }

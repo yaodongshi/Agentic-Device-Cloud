@@ -4,17 +4,28 @@
 # 前置：deploy/compose.yaml 已启动（docker compose -f deploy/compose.yaml up -d --build）
 set -euo pipefail
 
+if ! command -v docker >/dev/null 2>&1 && [ -x /Applications/Docker.app/Contents/Resources/bin/docker ]; then
+  export PATH="$PATH:/Applications/Docker.app/Contents/Resources/bin"
+fi
+command -v docker >/dev/null 2>&1 || { echo "未找到 docker CLI"; exit 1; }
+shopt -s nullglob
+MIGRATION_FILES=(ce/migrations/*.up.sql)
+[ "${#MIGRATION_FILES[@]}" -gt 0 ] || { echo "未找到迁移文件"; exit 1; }
+LATEST_MIGRATION="${MIGRATION_FILES[${#MIGRATION_FILES[@]}-1]##*/}"
+TARGET_MIGRATION_VERSION=$((10#${LATEST_MIGRATION%%_*}))
+
 BASE="${ADC_BASE_URL:-http://127.0.0.1:18080}"          # 统一 API 网关（唯一业务入口）
 DECIDE_BASE="${ADC_DECIDE_URL:-http://127.0.0.1:18082}" # adc 直连（仅 dev 决策注入）
 if [ -z "${ADC_DEVICE_SECRET:-}" ]; then
   ADC_DEVICE_SECRET=$(docker exec adc-app cat /tmp/adc-demo-secret 2>/dev/null || echo "")
 fi
 [ -n "$ADC_DEVICE_SECRET" ] || { echo "无法获取设备密钥（容器未运行或未 seed）"; exit 1; }
-PASS=0; FAIL=0
+PASS=0; FAIL=0; SKIP=0
 
 step() { echo "--- $1"; }
 ok()   { echo "  PASS: $1"; PASS=$((PASS+1)); }
 bad()  { echo "  FAIL: $1"; FAIL=$((FAIL+1)); }
+skip() { echo "  SKIP: $1"; SKIP=$((SKIP+1)); }
 
 # 1. 健康检查
 step "1. 网关健康检查"
@@ -87,6 +98,76 @@ sleep 1
 CNT=$(docker exec adc-postgres psql -U adc -d adc -t -c "SELECT count(*) FROM adc_audit_logs;" 2>/dev/null | tr -d ' ')
 [ "$CNT" -ge 1 ] && ok "审计记录 $CNT 条" || bad "审计表为空"
 
+# 11. 数据库迁移版本（V2.1 M8）
+step "11. 数据库迁移版本"
+MIGRATION_TABLE=$(docker exec adc-postgres psql -U "${ADC_PG_USER:-adc}" -d "${ADC_PG_DBNAME:-adc}" -Atc \
+  "SELECT to_regclass('public.adc_schema_migrations') IS NOT NULL;" 2>/dev/null || true)
+if [ "$MIGRATION_TABLE" = "t" ]; then
+  MIGRATION_LEDGER=$(docker exec adc-postgres psql -U "${ADC_PG_USER:-adc}" -d "${ADC_PG_DBNAME:-adc}" -AtF '|' -c \
+    "SELECT COUNT(*), COALESCE(MAX(version), 0), COALESCE(MIN(version), 0) FROM adc_schema_migrations;" 2>/dev/null || true)
+  MIGRATION_COUNT=${MIGRATION_LEDGER%%|*}
+  MIGRATION_REMAINDER=${MIGRATION_LEDGER#*|}
+  MIGRATION_VERSION=${MIGRATION_REMAINDER%%|*}
+  MIGRATION_MINIMUM=${MIGRATION_LEDGER##*|}
+  if [ "${MIGRATION_MINIMUM:-0}" -eq 1 ] && \
+     [ "${MIGRATION_COUNT:-0}" -eq "$TARGET_MIGRATION_VERSION" ] && \
+     [ "${MIGRATION_VERSION:-0}" -eq "$TARGET_MIGRATION_VERSION" ]; then
+    ok "迁移账本连续且已达目标版本 ${TARGET_MIGRATION_VERSION}（MIN=1，COUNT=MAX）"
+  else
+    bad "迁移账本异常：MIN=${MIGRATION_MINIMUM:-不可读} COUNT=${MIGRATION_COUNT:-不可读} MAX=${MIGRATION_VERSION:-不可读} TARGET=${TARGET_MIGRATION_VERSION}"
+  fi
+else
+  bad "adc_schema_migrations 不存在，既有卷升级门禁未就绪"
+fi
+
+# 12. OIDC 配置状态：302 表示已启用，404 表示显式禁用，其他状态异常。
+step "12. OIDC 配置状态"
+OIDC_CODE=$(curl -s -o /dev/null -w '%{http_code}' "$BASE/v1/admin/auth/oidc/start" || true)
+case "$OIDC_CODE" in
+  302) ok "OIDC 已启用，授权入口可重定向" ;;
+  404) ok "OIDC 已显式禁用（开发环境允许）" ;;
+  *) bad "OIDC 状态端点异常，HTTP $OIDC_CODE" ;;
+esac
+
+# 后续管理面专项检查复用演示管理员会话。
+LOGIN=$(curl -sf -H "Content-Type: application/json" \
+  -d "{\"username\":\"${ADC_SMOKE_ADMIN_USER:-admin}\",\"password\":\"${ADC_SMOKE_ADMIN_PASSWORD:-admin123!}\"}" \
+  "$BASE/v1/admin/auth/login" || true)
+ADMIN_TOKEN=$(echo "$LOGIN" | python3 -c "import json,sys; print(json.load(sys.stdin).get('token',''))" 2>/dev/null || true)
+TENANT_ID=$(echo "$LOGIN" | python3 -c "import json,sys; print(json.load(sys.stdin).get('tenant_id',''))" 2>/dev/null || true)
+if [ -n "$ADMIN_TOKEN" ] && [ -z "$TENANT_ID" ]; then
+  TENANTS=$(curl -sf -H "Authorization: Bearer $ADMIN_TOKEN" "$BASE/v1/admin/tenants?page=1&page_size=1" || true)
+  TENANT_ID=$(echo "$TENANTS" | python3 -c "import json,sys; items=json.load(sys.stdin).get('items',[]); print(items[0].get('id','') if items else '')" 2>/dev/null || true)
+fi
+
+# 13. 工具市场列表
+step "13. 工具市场列表"
+if [ -z "$ADMIN_TOKEN" ] || [ -z "$TENANT_ID" ]; then
+  bad "缺少管理员会话或租户 ID，无法验证工具市场"
+else
+  MARKET=$(curl -sf -H "Authorization: Bearer $ADMIN_TOKEN" "$BASE/v1/admin/tool-packages?tenant_id=$TENANT_ID&page=1&page_size=20" || true)
+  echo "$MARKET" | python3 -c "import json,sys; d=json.load(sys.stdin); assert isinstance(d.get('items'), list) and isinstance(d.get('total'), int)" 2>/dev/null \
+    && ok "工具市场列表契约可用" || bad "工具市场列表异常: $MARKET"
+fi
+
+# 14. 预算状态
+step "14. 租户预算状态"
+if [ -z "$ADMIN_TOKEN" ] || [ -z "$TENANT_ID" ]; then
+  bad "缺少管理员会话或租户 ID，无法验证预算状态"
+else
+  BUDGET=$(curl -sf -H "Authorization: Bearer $ADMIN_TOKEN" "$BASE/v1/admin/tenants/$TENANT_ID/budget-status" || true)
+  echo "$BUDGET" | python3 -c "import json,sys; d=json.load(sys.stdin); assert d.get('status') in ('OK','WARN','EXCEEDED') and isinstance(d.get('usage_percent'), int)" 2>/dev/null \
+    && ok "预算状态契约可用" || bad "预算状态异常: $BUDGET"
+fi
+
+# 15. 参数校验：运行态无法在不修改 seed 的前提下稳定注入 schema 边界，使用专门单测门禁。
+step "15. 工具参数校验"
+if (cd ce && go test ./internal/agentapi -run 'TestParamGuardRejects(MissingRequired|TypeError|RangeViolation)$' -count=1 >/dev/null); then
+  skip "未构造运行态 schema 边界；参数缺失、类型和范围拒绝已由 agentapi 单测门禁验证"
+else
+  bad "参数校验单测门禁失败"
+fi
+
 echo
-echo "========== SMOKE 结果: PASS=$PASS FAIL=$FAIL =========="
+echo "========== SMOKE 结果: PASS=$PASS FAIL=$FAIL SKIP=$SKIP =========="
 [ "$FAIL" -eq 0 ] || exit 1

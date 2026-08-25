@@ -26,9 +26,9 @@ fi
 echo "   请编辑 $DIST/.env 修改全部默认密码"
 
 echo "==> 启动"
-docker compose -f "$DIST/compose.yaml" up -d
+docker compose --env-file "$DIST/.env" -f "$DIST/compose.yaml" up -d --no-build --pull never
 
 echo "==> 验证"
 sleep 15
-docker compose -f "$DIST/compose.yaml" ps
+docker compose --env-file "$DIST/.env" -f "$DIST/compose.yaml" ps
 curl -sf http://127.0.0.1:18080/healthz && echo && echo "==> 安装完成，控制台：http://<本机IP>:18080"

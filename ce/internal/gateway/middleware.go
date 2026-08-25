@@ -156,6 +156,7 @@ var authHeaderNames = []string{
 	"Authorization",
 	"Cookie",
 	"X-ADC-Key",
+	"X-ADC-Application-Credential",
 	"X-Device-ID",
 	"X-ADC-Timestamp",
 	"X-ADC-Nonce",

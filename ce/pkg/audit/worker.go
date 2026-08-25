@@ -326,11 +326,19 @@ func (p *pgInserter) InsertBatch(ctx context.Context, evs []*AuditEvent) error {
 		if createdAt.IsZero() {
 			createdAt = time.Now()
 		}
+		eventType := ev.EventType
+		if eventType == "" {
+			eventType = EventTypeToolCall
+		}
+		actorType := ev.ActorType
+		if actorType == "" {
+			actorType = ActorTypeAgent
+		}
 		b.Queue(insertSQL,
 			ev.EventID,
 			ev.TenantID,
-			EventTypeToolCall,
-			ActorTypeAgent,
+			eventType,
+			actorType,
 			nullIfEmpty(ev.AgentID),
 			nullIfEmpty(ev.DeviceID),
 			nullIfEmpty(ev.ToolName),

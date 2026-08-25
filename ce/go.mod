@@ -4,12 +4,15 @@ go 1.26
 
 require (
 	adc.dev/core-sdk v0.0.0
+	github.com/coreos/go-oidc/v3 v3.20.0
+	github.com/go-jose/go-jose/v4 v4.1.4
 	github.com/goburrow/modbus v0.1.0
 	github.com/gopcua/opcua v0.9.1
 	github.com/gorilla/websocket v1.5.3
 	github.com/pashagolub/pgxmock/v4 v4.5.0
 	github.com/redis/go-redis/v9 v9.22.0
 	golang.org/x/crypto v0.55.0
+	golang.org/x/oauth2 v0.36.0
 )
 
 require (

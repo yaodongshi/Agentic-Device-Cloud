@@ -27,10 +27,55 @@ permissions:
   contents: read
 
 jobs:
+  release-source-gates:
+    name: release source gates (i18n + SDK + migrations + version)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.x"
+          cache-dependency-path: |
+            ce/go.mod
+            core-sdk/go.mod
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+      - uses: astral-sh/setup-uv@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - name: i18n gate
+        run: node scripts/i18n-check.mjs --self-test
+      - name: migration gate
+        run: bash scripts/migration-check.sh
+      - name: version gate
+        run: bash scripts/version-check.sh v0.3.0
+      - name: SDK matrix
+        run: |
+          python -m venv .venv
+          .venv/bin/pip install -e core-sdk/python pytest
+          bash scripts/sdk-matrix.sh
+
   go:
     name: go (gofmt + vet + test -race + coverage)
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    env:
+      ADC_MIGRATION_TEST_DATABASE_URL: postgres://adc:adc@127.0.0.1:5432/adc_test?sslmode=disable
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: adc
+          POSTGRES_PASSWORD: adc
+          POSTGRES_DB: adc_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U adc -d adc_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     steps:
       - uses: actions/checkout@v4
 

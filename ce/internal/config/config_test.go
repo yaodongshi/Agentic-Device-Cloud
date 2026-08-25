@@ -5,6 +5,28 @@ import (
 	"testing"
 )
 
+func TestLoadPostgres(t *testing.T) {
+	t.Setenv("PG_HOST", "db.internal")
+	t.Setenv("PG_PORT", "5433")
+	t.Setenv("PG_USER", "migrator")
+	t.Setenv("PG_PASSWORD", "secret")
+	t.Setenv("PG_DBNAME", "adc_test")
+	t.Setenv("PG_SSLMODE", "require")
+
+	dsn, err := LoadPostgres()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dsn.Host != "db.internal" || dsn.Port != 5433 || dsn.User != "migrator" || dsn.DBName != "adc_test" || dsn.SSLMode != "require" {
+		t.Fatalf("unexpected DSN: %+v", dsn)
+	}
+
+	t.Setenv("PG_PASSWORD", "")
+	if _, err := LoadPostgres(); err == nil {
+		t.Fatal("expected missing password error")
+	}
+}
+
 // envKeys covers every variable the Load function consults. Tests start from
 // a clean slate so a developer's shell environment cannot leak into results.
 var envKeys = []string{

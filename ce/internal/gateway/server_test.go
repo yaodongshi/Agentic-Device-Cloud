@@ -200,6 +200,27 @@ func TestAuthHeadersPassedThroughVerbatim(t *testing.T) {
 	}
 }
 
+func TestA2AApplicationCredentialPassedThroughVerbatim(t *testing.T) {
+	py := newEchoBackend(t, "py-agent")
+	gw := newGatewayTest(t, Config{Backends: Backends{PyAgent: py.url()}})
+
+	req, err := http.NewRequest(http.MethodPost, gw.URL+"/v2/agents/a2a/tasks", strings.NewReader(`{}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("X-ADC-Application-Credential", "adc_app_once")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+
+	got := py.single(t)
+	if value := got.Header.Get("X-ADC-Application-Credential"); value != "adc_app_once" {
+		t.Fatalf("py-agent received application credential %q, want verbatim value", value)
+	}
+}
+
 func TestTraceIDGeneratedAndPropagated(t *testing.T) {
 	admin := newEchoBackend(t, "admin")
 	gw := newGatewayTest(t, Config{Backends: Backends{Admin: admin.url()}})

@@ -1,14 +1,15 @@
 {
   "name": "adc-console",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.3.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "vue-tsc -b && vite build",
     "typecheck": "vue-tsc --noEmit",
     "lint": "eslint .",
-    "test": "vitest run"
+    "test": "vitest run",
+    "i18n:test": "node ../../scripts/i18n-check.mjs --self-test"
   },
   "dependencies": {
     "echarts": "^6.1.0",

@@ -20,6 +20,7 @@ const moduleRoles: Record<string, Role[]> = {
   ops: ['platform_admin'],
   adapters: ['platform_admin', 'tenant_admin'],
   market: ['platform_admin', 'tenant_admin'],
+  developer: ['platform_admin', 'tenant_admin'],
 }
 
 function moduleRoute(name: string, load: () => Promise<unknown>) {
@@ -84,6 +85,7 @@ export const router = createRouter({
         // Tool package marketplace (design/83 C3.1/C3.2): browse/search/
         // install/uninstall plus the publish form.
         moduleRoute('market', () => import('@/views/market/Market.vue')),
+        moduleRoute('developer', () => import('@/views/developer/DeveloperPortal.vue')),
       ],
     },
   ],
@@ -93,10 +95,17 @@ export const router = createRouter({
 // users hitting a module outside their role are sent to their home module.
 // The HITL landing page is exempt from the session requirement (F-11).
 const publicNames = ['login', 'hitlAction']
-router.beforeEach((to) => {
+router.beforeEach(async (to) => {
   const auth = useAuthStore()
-  if (!publicNames.includes(String(to.name)) && !auth.token) return { name: 'login' }
-  if (to.name === 'login' && auth.token) return { name: 'dashboard' }
+	if (!publicNames.includes(String(to.name)) && !auth.authenticated) {
+		try {
+			await auth.restoreCookieSession()
+		} catch {
+			return { name: 'login' }
+		}
+	}
+  if (!publicNames.includes(String(to.name)) && !auth.authenticated) return { name: 'login' }
+  if (to.name === 'login' && auth.authenticated) return { name: 'dashboard' }
   const roles = to.meta.roles as Role[] | undefined
   if (roles && auth.user && !roles.includes(auth.user.role)) {
     return { path: roleHome[auth.user.role] }

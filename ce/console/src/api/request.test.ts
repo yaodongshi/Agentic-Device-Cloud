@@ -116,6 +116,16 @@ describe('request', () => {
     expect(headers.get('Content-Type')).toBe('application/json')
     expect(headers.get('X-ADC-Confirm')).toBe('true')
   })
+
+  it('forwards the one-time application credential only when explicitly supplied', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ ok: true, mode: 'credential_introspection' }))
+    await request('/v1/developer/connectivity', {
+      headers: { 'X-ADC-Application-Credential': 'adc_app_once' },
+    })
+    const headers = new Headers(fetchMock.mock.calls[0][1].headers)
+    expect(headers.get('X-ADC-Application-Credential')).toBe('adc_app_once')
+    expect(localStorage.getItem('adc_application_credential')).toBeNull()
+  })
 })
 
 describe('api helpers', () => {

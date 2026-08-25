@@ -24,7 +24,10 @@ const (
 // join when approval/admin producers adopt the package.
 const (
 	EventTypeToolCall = "tool_call"
+	EventTypeAdminOp  = "admin_op"
+	EventTypeAuth     = "auth_event"
 	ActorTypeAgent    = "agent"
+	ActorTypeUser     = "user"
 )
 
 // AuditEvent is the wire shape of one audit record. It is JSON-encoded on
@@ -47,6 +50,8 @@ const (
 type AuditEvent struct {
 	EventID   string         `json:"event_id"`
 	TenantID  string         `json:"tenant_id"`
+	EventType string         `json:"event_type,omitempty"`
+	ActorType string         `json:"actor_type,omitempty"`
 	AgentID   string         `json:"agent_id,omitempty"`
 	DeviceID  string         `json:"device_id,omitempty"`
 	ToolName  string         `json:"tool_name,omitempty"`
@@ -70,6 +75,16 @@ func (e *AuditEvent) Validate() error {
 	}
 	if e.TenantID == "" {
 		return fmt.Errorf("audit: tenant_id is required")
+	}
+	switch e.EventType {
+	case "", EventTypeToolCall, EventTypeAdminOp, EventTypeAuth:
+	default:
+		return fmt.Errorf("audit: invalid event_type %q", e.EventType)
+	}
+	switch e.ActorType {
+	case "", ActorTypeAgent, ActorTypeUser:
+	default:
+		return fmt.Errorf("audit: invalid actor_type %q", e.ActorType)
 	}
 	switch e.Status {
 	case StatusSuccess, StatusFailed, StatusBlockedByHITL:

@@ -60,6 +60,19 @@ type DSN struct {
 	SSLMode  string
 }
 
+// LoadPostgres reads only database settings for database-only commands.
+func LoadPostgres() (DSN, error) {
+	dsn := DSN{
+		Host: getEnv("PG_HOST", "127.0.0.1"), Port: getEnvInt("PG_PORT", 5432),
+		User: getEnv("PG_USER", "adc"), Password: getEnv("PG_PASSWORD", ""),
+		DBName: getEnv("PG_DBNAME", "adc"), SSLMode: getEnv("PG_SSLMODE", "disable"),
+	}
+	if dsn.Password == "" {
+		return DSN{}, fmt.Errorf("config: PG_PASSWORD is required (env injection, never hardcode)")
+	}
+	return dsn, nil
+}
+
 func (d DSN) String() string {
 	return fmt.Sprintf("host=%s port=%d user=%s password=%s dbname=%s sslmode=%s",
 		d.Host, d.Port, d.User, d.Password, d.DBName, d.SSLMode)

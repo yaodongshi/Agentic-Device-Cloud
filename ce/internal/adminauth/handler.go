@@ -70,14 +70,42 @@ func (h *Handler) Routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /v1/admin/auth/login", h.handleLogin)
 	mux.HandleFunc("POST /v1/admin/auth/logout", h.handleLogout)
+	mux.HandleFunc("GET /v1/admin/auth/session", h.handleCurrentSession)
 	if h.OIDC == nil {
+		mux.HandleFunc("GET /v1/admin/auth/oidc/status", handleOIDCStatusDisabled)
 		mux.HandleFunc("GET /v1/admin/auth/oidc/start", handleOIDCDisabled)
-		mux.HandleFunc("GET /v1/admin/auth/oidc/callback", handleOIDCDisabled)
+		mux.HandleFunc("GET /v1/admin/auth/oidc/callback", handleOIDCCallbackDisabled)
 	} else {
+		mux.HandleFunc("GET /v1/admin/auth/oidc/status", h.OIDC.handleStatus)
 		mux.HandleFunc("GET /v1/admin/auth/oidc/start", h.OIDC.handleStart)
 		mux.HandleFunc("GET /v1/admin/auth/oidc/callback", h.OIDC.handleCallback)
 	}
 	return mux
+}
+
+type currentSessionResponse struct {
+	UserID      string `json:"user_id"`
+	DisplayName string `json:"display_name"`
+	TenantID    string `json:"tenant_id"`
+	Role        string `json:"role"`
+}
+
+func (h *Handler) handleCurrentSession(w http.ResponseWriter, r *http.Request) {
+	token := ExtractToken(r)
+	if token == "" {
+		writeUnauthorized(w, r)
+		return
+	}
+	sess, err := h.sessions.Get(r.Context(), HashToken(token))
+	if errors.Is(err, ErrSessionNotFound) {
+		writeUnauthorized(w, r)
+		return
+	}
+	if err != nil {
+		writeInternal(w, r)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, currentSessionResponse{UserID: sess.UserID, DisplayName: sess.UserID, TenantID: sess.TenantID, Role: primaryRole(sess.Roles)})
 }
 
 // loginRequest mirrors design/33 3.1.1. mfa_code is reserved for the EE MFA

@@ -136,6 +136,7 @@ const menus: MenuItem[] = [
   { path: '/adapters', key: 'adapters', roles: ['platform_admin', 'tenant_admin'] },
   // Tool package marketplace (design/83 C3.1/C3.2).
   { path: '/market', key: 'market', roles: ['platform_admin', 'tenant_admin'] },
+  { path: '/developer', key: 'developer', roles: ['platform_admin', 'tenant_admin'] },
 ]
 
 const visibleMenus = computed(() =>
@@ -192,4 +193,15 @@ function switchLang(lang: string) {
 .header-actions { display: flex; align-items: center; gap: 8px; }
 .page-title { font-weight: 600; }
 .user { display: inline-flex; align-items: center; gap: var(--adc-space-2); cursor: pointer; color: var(--adc-text); }
+@media (max-width: 720px) {
+  .layout { height: auto; min-height: 100vh; flex-direction: column; }
+  .aside { width: 100% !important; border-right: 0; border-bottom: 1px solid var(--adc-border); }
+  .brand { height: 48px; }
+  .aside :deep(.el-menu) { display: flex; overflow-x: auto; border-right: 0; }
+  .aside :deep(.el-menu-item) { flex: 0 0 auto; height: 44px; line-height: 44px; }
+  .header { padding: 0 var(--adc-space-3); }
+  .page-title { max-width: 45vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  :deep(.el-main) { padding: var(--adc-space-3); min-width: 0; }
+  .role { display: none; }
+}
 </style>

@@ -177,6 +177,8 @@ type Server struct {
 	// design/82 C3); nil fails the five /v1/admin/tool-packages*
 	// handlers closed with 500 code 10007 until the assembly wires it.
 	Market ToolPackageRepo
+	// Applications serves tenant developer application and credential lifecycle.
+	Applications DeveloperApplicationRepo
 	// BudgetUsage prices the current month's metered fee for the C5.1
 	// budget status endpoint (design/83); nil fails the handler closed
 	// with 500 code 10007 until the assembly wires it.
@@ -257,6 +259,16 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /v1/admin/agent-keys", authz(admin(http.HandlerFunc(s.handleListKeys))))
 	mux.Handle("POST /v1/admin/agent-keys/{keyID}/revoke", authz(admin(http.HandlerFunc(s.handleRevokeKey))))
 	mux.Handle("POST /v1/admin/agent-keys/{keyID}/rotate", authz(admin(http.HandlerFunc(s.handleRotateKey))))
+
+	mux.Handle("POST /v1/admin/developer-applications", authz(admin(http.HandlerFunc(s.handleCreateApplication))))
+	mux.Handle("GET /v1/admin/developer-applications", authz(admin(http.HandlerFunc(s.handleListApplications))))
+	mux.Handle("GET /v1/admin/developer-applications/{applicationID}", authz(admin(http.HandlerFunc(s.handleGetApplication))))
+	mux.Handle("POST /v1/admin/developer-applications/{applicationID}/disable", authz(admin(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { s.mutateApplication(w, r, "disable") }))))
+	mux.Handle("DELETE /v1/admin/developer-applications/{applicationID}", authz(admin(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { s.mutateApplication(w, r, "delete") }))))
+	mux.Handle("POST /v1/admin/developer-applications/{applicationID}/credentials/rotate", authz(admin(http.HandlerFunc(s.handleRotateApplication))))
+	mux.Handle("POST /v1/admin/developer-applications/{applicationID}/credentials/revoke", authz(admin(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { s.mutateApplication(w, r, "revoke") }))))
+	mux.Handle("GET /v1/developer/connectivity", RequireApplicationScope(s.Applications, ApplicationScopeTasksRead, s.Audit)(http.HandlerFunc(s.handleApplicationConnectivity)))
+	mux.Handle("POST /v1/developer/introspection", http.HandlerFunc(s.handleApplicationIntrospection))
 
 	// auditor may read audit logs (design/33 1.2). The matrix in
 	// adminauth grants auditors GET/HEAD on /v1/admin/audit-logs only,

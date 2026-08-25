@@ -39,6 +39,9 @@ jobs:
       - name: Lint
         run: npm run lint
 
+      - name: i18n structure and terminology
+        run: npm run i18n:test
+
       - name: Typecheck
         run: npm run typecheck
 

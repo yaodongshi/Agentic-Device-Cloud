@@ -1,6 +1,11 @@
-import { beforeEach, describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
+import { api } from '@/api/request'
 import { useAuthStore } from './auth'
+
+vi.mock('@/api/request', () => ({ api: { get: vi.fn() } }))
+
+const getMock = vi.mocked(api.get)
 
 const user = {
   userId: 'u-1',
@@ -11,6 +16,7 @@ const user = {
 
 beforeEach(() => {
   localStorage.clear()
+	getMock.mockReset()
   setActivePinia(createPinia())
 })
 
@@ -63,4 +69,15 @@ describe('auth store', () => {
     expect(store.token).toBe('tok')
     expect(store.user).toBeNull()
   })
+
+	it('restores an HttpOnly cookie session without persisting a bearer token', async () => {
+		getMock.mockResolvedValue({ user_id: 'u-oidc', display_name: 'OIDC User', tenant_id: 't-1', role: 'auditor' })
+		const store = useAuthStore()
+		await store.restoreCookieSession()
+		expect(getMock).toHaveBeenCalledWith('/v1/admin/auth/session')
+		expect(store.authenticated).toBe(true)
+		expect(store.token).toBe('')
+		expect(localStorage.getItem('adc_token')).toBeNull()
+		expect(store.user?.userId).toBe('u-oidc')
+	})
 })

@@ -17,9 +17,10 @@ vi.mock('vue-router', () => ({
 
 vi.mock('@/api/request', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/api/request')>()
-  return { ...actual, api: { ...actual.api, post: vi.fn() } }
+  return { ...actual, api: { ...actual.api, get: vi.fn(), post: vi.fn() } }
 })
 
+const getMock = vi.mocked(api.get)
 const postMock = vi.mocked(api.post)
 
 const loginResponse = {
@@ -59,6 +60,8 @@ beforeEach(() => {
   localStorage.clear()
   pushMock.mockReset()
   postMock.mockReset()
+	getMock.mockReset()
+	getMock.mockResolvedValue({ enabled: false })
   if (typeof window.ResizeObserver === 'undefined') {
     Object.defineProperty(window, 'ResizeObserver', {
       configurable: true,
@@ -91,6 +94,15 @@ describe('Login', () => {
     expect(wrapper.find('input[autocomplete="username"]').exists()).toBe(true)
     expect(wrapper.find('input[autocomplete="current-password"]').exists()).toBe(true)
   })
+
+	it('enables SSO after the status probe reports OIDC available', async () => {
+		getMock.mockResolvedValue({ enabled: true })
+		const wrapper = mountLogin()
+		await flushPromises()
+		expect(getMock).toHaveBeenCalledWith('/v1/admin/auth/oidc/status')
+		expect(wrapper.get('.sso').attributes('disabled')).toBeUndefined()
+		expect(wrapper.get('.sso').attributes('href')).toBe('/v1/admin/auth/oidc/start')
+	})
 
   it('shows validation errors and does not call the API on an empty submit', async () => {
     const wrapper = mountLogin()

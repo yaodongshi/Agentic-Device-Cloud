@@ -73,6 +73,18 @@ Keep pull requests small and focused on one change. Large changes without prior 
 - Behavioral changes must update documentation: `docs/en/` is the source language, translations follow.
 - End-to-end verification: `docker compose -f deploy/compose.yaml up -d` then `bash scripts/dev-smoke.sh`.
 
+## Translation workflow
+
+English (`ce/console/src/i18n/locales/en.ts` and `docs/en/`) is the source language. Chinese (`ce/console/src/i18n/locales/zh-CN.ts` and `docs/zh/`) follows in the same pull request for user-facing release content. Language-resource changes do not require business-code changes.
+
+1. Add or revise the English source key. Use semantic keys and named placeholders such as `{name}`; do not build sentences by concatenating translated fragments.
+2. Update the Chinese resource with the same key, value type, and placeholders. Follow the frozen terms in [`docs/i18n-glossary.md`](docs/i18n-glossary.md).
+3. Run `cd ce/console && npm run i18n:test`, then run `npm run build`.
+4. Request review from both a domain owner and a Chinese reviewer. Machine translation may be used only as a draft; user-facing text requires human review.
+5. If context requires a non-standard high-risk term, add the exact key to `scripts/i18n-term-allowlist.json` and explain the exception in the pull request. Wildcards and blanket exclusions are not accepted.
+
+CI blocks missing keys, type drift, placeholder drift, empty values, and unapproved high-risk terminology. Translation-only pull requests may be merged independently when these gates and the Console build pass.
+
 ## Response SLA
 
 Maintainers commit to:

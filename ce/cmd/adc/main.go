@@ -231,7 +231,10 @@ func main() {
 	sessions := adminauth.NewValkeySessionStore(rdb)
 	users := adminauth.NewPGUserStore(pool.Pool)
 	authHandler := adminauth.NewHandler(users, sessions)
-	authHandler.OIDC = wireOIDC(users, sessions, rdb)
+	authHandler.OIDC, err = wireOIDC(ctx, users, sessions, rdb)
+	if err != nil {
+		fatal(err)
+	}
 	adminSrv := adminapi.NewServer(
 		adminapi.NewPGTenantRepo(pool.Pool),
 		adminapi.NewPGDeviceRepo(pool.Pool),
@@ -244,6 +247,7 @@ func main() {
 	adminSrv.Tickets = adminapi.NewPGTicketsRepo(pool.Pool)
 	adminSrv.Adapters = buildAdapterRegistry()
 	adminSrv.Market = adminapi.NewPGToolPackageRepo(pool.Pool)
+	adminSrv.Applications = adminapi.NewPGDeveloperApplicationRepo(pool.Pool)
 	adminSrv.BudgetUsage = wireBudgetUsage(pool)
 	// FR-011 batch onboarding (design/82 B1): import job state lives in
 	// Valkey (24h TTL, no schema migration), device groups in PG.
@@ -306,6 +310,7 @@ func main() {
 
 	mux := http.NewServeMux()
 	mux.Handle("/v1/admin/", combinedAdminHandler(authHandler.Routes(), adminHandler))
+	mux.Handle("/v1/developer/", adminHandler)
 	mux.Handle("/v1/agent/mcp/", agentChain)
 	callbackHandler.Routes(mux)
 	mux.Handle("GET /v1/devices/tunnel", tunnel)
@@ -432,11 +437,6 @@ func combinedAdminHandler(authHandler, adminHandler http.Handler) http.Handler {
 
 // adminAuditSink adapts adminapi.AuditSink onto the pkg/audit Valkey
 // pipeline (SEC-07). Emission is best-effort by contract: the pkg/audit
-// worker currently stamps tool_call/agent at insert time (worker.go
-// insertSQL), so admin ops do not yet carry the admin_op shape on
-// adc_audit_logs; wiring the sink keeps the seam active until the audit
-// package grows an admin-shaped event (see the AuditSink note in
-// internal/adminapi/server.go).
 type adminAuditSink struct {
 	inner *audit.ValkeySink
 }
@@ -445,11 +445,26 @@ func (a *adminAuditSink) Record(ctx context.Context, op adminapi.AdminOp) error 
 	if a == nil || a.inner == nil {
 		return nil
 	}
+	details := make(map[string]any, len(op.Details)+3)
+	for key, value := range op.Details {
+		details[key] = value
+	}
+	details["action"] = op.Action
+	details["target"] = op.Target
+	if op.Reason != "" {
+		details["reason"] = op.Reason
+	}
+	eventType, actorType := audit.EventTypeAdminOp, audit.ActorTypeUser
+	if strings.HasSuffix(op.Action, ".scope_denied") {
+		eventType, actorType = audit.EventTypeAuth, audit.ActorTypeAgent
+	}
 	return a.inner.Enqueue(ctx, &audit.AuditEvent{
 		EventID:   op.EventID,
 		TenantID:  op.TenantID,
+		EventType: eventType,
+		ActorType: actorType,
 		AgentID:   op.ActorID,
-		Params:    op.Details,
+		Params:    details,
 		Status:    audit.StatusSuccess,
 		TraceID:   op.TraceID,
 		CreatedAt: op.CreatedAt,
@@ -1182,25 +1197,32 @@ func pgParamRules(pool *db.Pool) agentapi.ParamRulesProvider {
 // wireOIDC builds the OIDC login path when ADC_OIDC_ENABLE=true (design/83
 // C4.1). The provider implements the standard authorization-code flow with
 // OIDC discovery (RFC 8414); disabled otherwise (endpoints answer 404).
-func wireOIDC(users adminauth.UserStore, sessions adminauth.SessionStore, rdb *redis.Client) *adminauth.OIDCHandler {
+func wireOIDC(ctx context.Context, users adminauth.UserStore, sessions adminauth.SessionStore, rdb *redis.Client) (*adminauth.OIDCHandler, error) {
 	if os.Getenv("ADC_OIDC_ENABLE") != "true" {
-		return nil
+		return nil, nil
 	}
-	provider := newGenericOIDCProvider(
+	provider, err := newGenericOIDCProvider(ctx,
 		os.Getenv("ADC_OIDC_ISSUER"),
 		os.Getenv("ADC_OIDC_CLIENT_ID"),
 		os.Getenv("ADC_OIDC_CLIENT_SECRET"),
 		os.Getenv("ADC_OIDC_REDIRECT_URL"),
+		getenvDef("ADC_OIDC_SCOPE", "openid email profile"),
+		os.Getenv("ADC_OIDC_ALLOW_LOOPBACK_HTTP") == "true",
 	)
+	if err != nil {
+		return nil, fmt.Errorf("configure OIDC: %w", err)
+	}
 	cfg := adminauth.OIDCConfig{
-		Issuer:       os.Getenv("ADC_OIDC_ISSUER"),
+		Issuer:       strings.TrimRight(os.Getenv("ADC_OIDC_ISSUER"), "/"),
 		ClientID:     os.Getenv("ADC_OIDC_CLIENT_ID"),
 		ClientSecret: os.Getenv("ADC_OIDC_CLIENT_SECRET"),
 		RedirectURL:  os.Getenv("ADC_OIDC_REDIRECT_URL"),
 		Scope:        getenvDef("ADC_OIDC_SCOPE", "openid email profile"),
 	}
 	states := adminauth.NewValkeyOIDCStateStore(rdb)
-	return adminauth.NewOIDCHandler(users, sessions, provider, states, cfg)
+	h := adminauth.NewOIDCHandler(users, sessions, provider, states, cfg)
+	h.FrontendRedirectURL = getenvDef("ADC_OIDC_FRONTEND_REDIRECT_URL", "/login?oidc=success")
+	return h, nil
 }
 
 func getenvDef(k, def string) string {

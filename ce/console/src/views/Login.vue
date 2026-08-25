@@ -68,9 +68,11 @@
         </el-button>
         <el-button
           class="sso"
-          disabled
+          tag="a"
+          :href="oidcEnabled ? '/v1/admin/auth/oidc/start' : undefined"
+          :disabled="!oidcEnabled"
         >
-          {{ t('login.ssoSoon') }}
+          {{ t('login.sso') }}
         </el-button>
       </el-form>
     </el-card>
@@ -81,7 +83,7 @@
 </template>
 
 <script setup lang="ts">
-import { reactive, ref } from 'vue'
+import { onMounted, reactive, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import type { FormInstance, FormRules } from 'element-plus'
@@ -89,7 +91,7 @@ import { api } from '@/api/request'
 import { errorMessage } from '@/api/errors'
 import { useAuthStore } from '@/stores/auth'
 import { useBrandingStore } from '@/stores/branding'
-import type { LoginResponse } from '@/api/types'
+import type { LoginResponse, OIDCStatusResponse } from '@/api/types'
 
 const { t } = useI18n()
 const router = useRouter()
@@ -99,6 +101,7 @@ const branding = useBrandingStore()
 const formRef = ref<FormInstance>()
 const loading = ref(false)
 const errorMsg = ref('')
+const oidcEnabled = ref(false)
 
 const form = reactive({ username: '', password: '' })
 
@@ -106,6 +109,21 @@ const rules: FormRules = {
   username: [{ required: true, message: t('login.usernameRequired'), trigger: 'blur' }],
   password: [{ required: true, message: t('login.passwordRequired'), trigger: 'blur' }],
 }
+
+onMounted(async () => {
+	try {
+		const status = await api.get<OIDCStatusResponse>('/v1/admin/auth/oidc/status')
+		oidcEnabled.value = status.enabled
+		if (new URLSearchParams(window.location.search).get('oidc') === 'success') {
+			await auth.restoreCookieSession()
+			await router.push('/dashboard')
+		}
+	} catch (err) {
+		if (new URLSearchParams(window.location.search).get('oidc') === 'success') {
+			errorMsg.value = errorMessage(err, t)
+		}
+	}
+})
 
 async function submit() {
   const valid = await formRef.value?.validate().catch(() => false)

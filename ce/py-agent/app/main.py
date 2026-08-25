@@ -10,27 +10,44 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+import httpx
 from evals.harness import EvalHarness
 from evals.models import EvalReport, EvalRunSpec
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse
 
-from app.a2a import build_agent_card
+from app.a2a import (
+    DEFAULT_ADMIN_INTERNAL_URL,
+    Introspector,
+    build_agent_card,
+    introspect_application,
+)
 from app.a2a import router as a2a_router
 from app.llm_router import router as llm_router
 
 DEFAULT_SUITES_DIR_ENV = "ADC_EVAL_SUITES_DIR"
 
 
-def create_app(suites_dir: Path | None = None) -> FastAPI:
+def create_app(
+    suites_dir: Path | None = None,
+    *,
+    admin_internal_url: str | None = None,
+    introspector: Introspector = introspect_application,
+    auth_transport: httpx.AsyncBaseTransport | None = None,
+) -> FastAPI:
     """Assemble the application with its own harness instance."""
     harness = EvalHarness(suites_dir or Path(os.environ.get(DEFAULT_SUITES_DIR_ENV, "suites")))
     app = FastAPI(title="ADC Python Agent Plane", version="0.1.0")
+    app.state.admin_internal_url = admin_internal_url or os.environ.get(
+        "ADC_ADMIN_INTERNAL_URL", DEFAULT_ADMIN_INTERNAL_URL
+    )
+    app.state.introspector = introspector
+    app.state.auth_transport = auth_transport
     app.include_router(llm_router)
     app.include_router(a2a_router)
 
     @app.get("/.well-known/agent-card.json")
-    def agent_card():
+    def agent_card() -> dict[str, object]:
         return build_agent_card().model_dump()
 
     @app.get("/healthz")

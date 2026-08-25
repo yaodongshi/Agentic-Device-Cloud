@@ -100,10 +100,7 @@ func TestPGUserStoreGetByUsername(t *testing.T) {
 
 var _ = pgx.ErrNoRows
 
-// TestPGUserStoreGetBySubject covers the OIDC subject lookup (design/83
-// C4.1): success with role loading, unknown subject mapping, and the
-// auth_source='OIDC' + metadata.oidc_subject predicate shape.
-func TestPGUserStoreGetBySubject(t *testing.T) {
+func TestPGUserStoreGetByOIDCIdentity(t *testing.T) {
 	ctx := context.Background()
 
 	t.Run("ok with roles", func(t *testing.T) {
@@ -113,12 +110,12 @@ func TestPGUserStoreGetBySubject(t *testing.T) {
 		}
 		defer m.Close()
 		m.ExpectQuery(regexp.QuoteMeta(`
-		SELECT id::text, username, COALESCE(password_hash, ''), tenant_id::text, status
-		  FROM adc_users
-		 WHERE auth_source = 'OIDC'
-		   AND metadata->>'oidc_subject' = $1
-		   AND deleted_at IS NULL`)).
-			WithArgs("sub-oidc-1").
+		SELECT u.id::text, u.username, COALESCE(u.password_hash, ''), u.tenant_id::text, u.status
+		  FROM adc_oidc_identities i
+		  JOIN adc_users u ON u.id = i.user_id
+		 WHERE i.issuer = $1 AND i.subject = $2
+		   AND u.auth_source = 'OIDC' AND u.deleted_at IS NULL`)).
+			WithArgs("https://idp.example", "sub-oidc-1").
 			WillReturnRows(pgxmock.NewRows([]string{"id", "username", "password_hash", "tenant_id", "status"}).
 				AddRow("oidc-user-id", "sso@corp.com", "", "t1", "ACTIVE"))
 		m.ExpectQuery(regexp.QuoteMeta(`
@@ -130,9 +127,9 @@ func TestPGUserStoreGetBySubject(t *testing.T) {
 			WillReturnRows(pgxmock.NewRows([]string{"role_code"}).
 				AddRow("TENANT_ADMIN"))
 		store := NewPGUserStore(m)
-		u, err := store.GetBySubject(ctx, "sub-oidc-1")
+		u, err := store.GetByOIDCIdentity(ctx, "https://idp.example", "sub-oidc-1")
 		if err != nil {
-			t.Fatalf("GetBySubject: %v", err)
+			t.Fatalf("GetByOIDCIdentity: %v", err)
 		}
 		if u.ID != "oidc-user-id" || u.TenantID != "t1" || u.Status != "ACTIVE" {
 			t.Fatalf("unexpected user: %+v", u)
@@ -155,15 +152,15 @@ func TestPGUserStoreGetBySubject(t *testing.T) {
 		}
 		defer m.Close()
 		m.ExpectQuery(regexp.QuoteMeta(`
-		SELECT id::text, username, COALESCE(password_hash, ''), tenant_id::text, status
-		  FROM adc_users
-		 WHERE auth_source = 'OIDC'
-		   AND metadata->>'oidc_subject' = $1
-		   AND deleted_at IS NULL`)).
-			WithArgs("sub-ghost").
+		SELECT u.id::text, u.username, COALESCE(u.password_hash, ''), u.tenant_id::text, u.status
+		  FROM adc_oidc_identities i
+		  JOIN adc_users u ON u.id = i.user_id
+		 WHERE i.issuer = $1 AND i.subject = $2
+		   AND u.auth_source = 'OIDC' AND u.deleted_at IS NULL`)).
+			WithArgs("https://idp.example", "sub-ghost").
 			WillReturnRows(pgxmock.NewRows([]string{"id", "username", "password_hash", "tenant_id", "status"}))
 		store := NewPGUserStore(m)
-		if _, err := store.GetBySubject(ctx, "sub-ghost"); !errors.Is(err, ErrUserNotFound) {
+		if _, err := store.GetByOIDCIdentity(ctx, "https://idp.example", "sub-ghost"); !errors.Is(err, ErrUserNotFound) {
 			t.Fatalf("want ErrUserNotFound, got %v", err)
 		}
 	})

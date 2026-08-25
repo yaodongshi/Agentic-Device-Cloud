@@ -4,21 +4,26 @@
 # 产物目录 deploy/offline/dist/，复制到客户内网后运行 install-offline.sh。
 set -euo pipefail
 
-cd "$(dirname "$0")/.."   # 到仓库根
+cd "$(dirname "$0")/../.."   # 到仓库根
 OUT=deploy/offline/dist
+ADC_VERSION="${ADC_VERSION:-dev}"
+ADC_IMAGE_PREFIX="${ADC_IMAGE_PREFIX:-adc}"
+ADC_PLATFORM="${ADC_PLATFORM:-linux/amd64}"
+ADC_IMAGE_PREFIX="${ADC_IMAGE_PREFIX%/}"
+[ -n "$ADC_VERSION" ] || { echo "ERROR: ADC_VERSION 不能为空"; exit 1; }
+[ -n "$ADC_IMAGE_PREFIX" ] || { echo "ERROR: ADC_IMAGE_PREFIX 不能为空"; exit 1; }
 rm -rf "$OUT" && mkdir -p "$OUT"
 
-echo "==> 1/4 打包镜像（双架构）"
-docker compose -f deploy/compose.yaml images -q >/dev/null 2>&1 || true
+echo "==> 1/4 打包镜像（目标平台：$ADC_PLATFORM）"
 IMAGES=(
-  adc/ce:dev
-  adc/py-agent:dev
-  adc/console:dev
+  "$ADC_IMAGE_PREFIX/ce:$ADC_VERSION"
+  "$ADC_IMAGE_PREFIX/py-agent:$ADC_VERSION"
+  "$ADC_IMAGE_PREFIX/console:$ADC_VERSION"
   postgres:16-alpine
   valkey/valkey:8-alpine
 )
 for img in "${IMAGES[@]}"; do
-  docker pull --platform linux/amd64 "$img" >/dev/null 2>&1 || true
+  docker pull --platform "$ADC_PLATFORM" "$img"
 done
 docker save "${IMAGES[@]}" | gzip > "$OUT/adc-images.tar.gz"
 echo "   -> $OUT/adc-images.tar.gz ($(du -h "$OUT/adc-images.tar.gz" | cut -f1))"
@@ -44,9 +49,15 @@ fi
 echo "==> 3/4 复制安装材料"
 cp deploy/offline/install-offline.sh "$OUT/"
 cp deploy/compose.yaml "$OUT/compose.yaml"
+cp -R deploy/backup "$OUT/backup"
 cp deploy/valkey-acl.conf "$OUT/"
 cp deploy/nginx.conf "$OUT/"
 cp deploy/.env.example "$OUT/.env.example"
+{
+  printf '\n# 离线包制品坐标（由 offline-bundle.sh 生成）\n'
+  printf 'ADC_IMAGE_PREFIX=%s\n' "$ADC_IMAGE_PREFIX"
+  printf 'ADC_VERSION=%s\n' "$ADC_VERSION"
+} >> "$OUT/.env.example"
 cp -R ce/migrations "$OUT/migrations"
 
 echo "==> 4/4 生成 manifest"

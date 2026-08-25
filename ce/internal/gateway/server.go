@@ -161,6 +161,7 @@ func ConfigFromEnv() Config {
 // buildTable registers the fixed V1.0 prefix table (LLD 3.5.1):
 //
 //	/v1/admin/*        -> Admin API
+//	/v1/developer/*    -> developer credential introspection
 //	/v1/agent/*        -> Agent API
 //	/v1/devices/tunnel -> Device Connector (WSS)
 //	/v1/hitl/*         -> Approval Service
@@ -174,6 +175,7 @@ func buildTable(backends map[string]*url.URL) (*Table, error) {
 		wss    bool
 	}{
 		{"/v1/admin", "admin", false},
+		{"/v1/developer", "admin", false},
 		{"/v1/agent", "agentapi", false},
 		{"/v1/devices/tunnel", "connector", true},
 		{"/v1/hitl", "approval", false},

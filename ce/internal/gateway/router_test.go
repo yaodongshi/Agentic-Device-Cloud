@@ -63,6 +63,7 @@ func TestTableMatchSegmentAware(t *testing.T) {
 		{"/v1/administer", false},
 		{"/", false},
 		{"/v2/agents", false},
+		{"/v1/developer", false},
 	}
 	for _, c := range cases {
 		_, ok := tb.Match(c.path)

@@ -3,6 +3,7 @@ package adminauth
 import (
 	"context"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"regexp"
@@ -79,6 +80,34 @@ func (f *fakeValkey) Del(ctx context.Context, keys ...string) *redis.IntCmd {
 		}
 	}
 	cmd.SetVal(n)
+	return cmd
+}
+
+func (f *fakeValkey) Eval(ctx context.Context, _ string, keys []string, args ...interface{}) *redis.Cmd {
+	cmd := redis.NewCmd(ctx)
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(keys) != 1 || len(args) != 1 {
+		cmd.SetErr(errors.New("invalid eval arguments"))
+		return cmd
+	}
+	raw, ok := f.kv[keys[0]]
+	if !ok {
+		cmd.SetErr(redis.Nil)
+		return cmd
+	}
+	var tx OIDCTransaction
+	if err := json.Unmarshal([]byte(raw), &tx); err != nil {
+		cmd.SetErr(err)
+		return cmd
+	}
+	if tx.BrowserBinding != fmt.Sprint(args[0]) {
+		cmd.SetErr(redis.Nil)
+		return cmd
+	}
+	delete(f.kv, keys[0])
+	delete(f.ttls, keys[0])
+	cmd.SetVal(raw)
 	return cmd
 }
 

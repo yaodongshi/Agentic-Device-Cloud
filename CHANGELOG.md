@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - Release candidate
+
+### Added
+- Modbus and OPC UA adapter framework, adapter console, and signed tool package market
+- White-label configuration seam, tenant budget status, and tool parameter validation
+- Bilingual translation structure, placeholder, empty-value, and high-risk terminology gates
+- Three-image release candidate pipeline for ADC, Python Agent, and Console with per-platform SPDX SBOMs
+
+### Changed
+- Compose application images now share the immutable `ADC_VERSION` selector, defaulting to `dev`
+- Release candidates require source, SDK, i18n, migration, version, and Compose smoke gates before artifacts are built
+
+### Security
+- OIDC production hardening and versioned database migration lifecycle are tracked as V2.1 M8 release blockers
+
+> This is a candidate entry. No `v0.3.0` tag or GitHub Release exists until M8 acceptance is approved.
+
 ## [0.2.0] - 2026-08-15
 
 ### Added
@@ -23,32 +40,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Valkey ACL username wiring (audit/metering/wake bus WRONGPASS)
 - Nullable column scan crashes (adminapi devices, approval tickets)
 - Concurrent rate-limit over-admission; JSONB null marshaling; FROZEN status case mismatch
-
-### Added
-
-### Changed
-
-### Fixed
-
-## [0.2.0] - 2026-08-15
-
-### Added
-- Console dashboard landing page (KPI cards, recent audit, first-login guide)
-- Demo dataset (2 devices, 3 tools, API key, audit samples, pending ticket) + tenant-scoped demo accounts
-- GET /v1/admin/approval-tickets endpoint; frontend auto tenant scoping
-- /metrics through the unified entry; gateway Valkey token-bucket rate limiter live
-- Ops monitor page (Grafana embed, platform_admin), GitHub Pages docs workflow, OpenSSF Scorecard workflow
-- Pilot operations docs (deployment guide, weekly report template, onboarding SOP, notification checklist)
-- Full-detail breakdown plan (design/82)
-
-### Fixed
-- Contract drift: low-risk call envelope, callback error-code ladder, cross-tenant 403
-- ratelimit float64 clock precision bug (500ms boundary false rejection)
-- Valkey ACL username wiring (audit/metering/wake bus WRONGPASS)
-- FROZEN status case mismatch, JSONB null marshaling
-
-### Changed
-- Coverage gate enabled in CI (75.3% >= 70%); 10-round -race stability verified
 
 ## [0.1.0] - 2026-08-15
 
@@ -93,5 +84,7 @@ workflow owner when the v0.1.0 tag is cut).
   rate limiting, HITL gating, audit immutability and TLS/ACL baselines
   (SEC-01 to SEC-14 verification covered by the test plan).
 
-[Unreleased]: https://github.com/yaodongshi/Agentic-Device-Cloud/compare/v0.1.0...dev
+[Unreleased]: https://github.com/yaodongshi/Agentic-Device-Cloud/compare/v0.2.0...dev
+[0.3.0]: https://github.com/yaodongshi/Agentic-Device-Cloud/compare/v0.2.0...v0.3.0
+[0.2.0]: https://github.com/yaodongshi/Agentic-Device-Cloud/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/yaodongshi/Agentic-Device-Cloud/releases/tag/v0.1.0

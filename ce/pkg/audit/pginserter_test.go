@@ -76,6 +76,26 @@ func TestPGInserterInsertBatch(t *testing.T) {
 		}
 	})
 
+	t.Run("explicit admin event shape", func(t *testing.T) {
+		m, err := pgxmock.NewPool()
+		if err != nil {
+			t.Fatalf("pgxmock.NewPool: %v", err)
+		}
+		defer m.Close()
+		admin := &AuditEvent{EventID: "e-admin", TenantID: "t1", EventType: EventTypeAdminOp,
+			ActorType: ActorTypeUser, AgentID: "user-1", Status: StatusSuccess}
+		m.ExpectBatch().ExpectExec(regexp.QuoteMeta(insertSQL)).
+			WithArgs("e-admin", "t1", EventTypeAdminOp, ActorTypeUser,
+				"user-1", nil, nil, 0, nil, nil, StatusSuccess, nil, "e-admin", pgxmock.AnyArg()).
+			WillReturnResult(pgxmock.NewResult("INSERT", 1))
+		if err := (&pgInserter{pool: m}).InsertBatch(ctx, []*AuditEvent{admin}); err != nil {
+			t.Fatalf("InsertBatch: %v", err)
+		}
+		if err := m.ExpectationsWereMet(); err != nil {
+			t.Fatalf("unmet expectations: %v", err)
+		}
+	})
+
 	t.Run("permanent insert error classified", func(t *testing.T) {
 		m, err := pgxmock.NewPool()
 		if err != nil {

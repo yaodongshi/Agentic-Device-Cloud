@@ -46,7 +46,6 @@ services:
       - "wal_level=replica"
     volumes:
       - adc_pg_data:/var/lib/postgresql/data
-      - ../ce/migrations:/docker-entrypoint-initdb.d:ro
       - adc_backup:/backup
       - ./backup/postgres.conf:/etc/postgresql/adc-archive.conf:ro
     healthcheck:
@@ -148,18 +147,38 @@ services:
       retries: 12
     networks: [adc-net]
 
+  adc-migrate:
+    build:
+      context: ..
+      dockerfile: Dockerfile.adc
+    image: ${ADC_IMAGE_PREFIX:-adc}/ce:${ADC_VERSION:-dev}
+    container_name: adc-migrate
+    restart: "no"
+    entrypoint: ["/usr/local/bin/adc-migrate"]
+    environment:
+      PG_HOST: postgres
+      PG_PORT: "5432"
+      PG_USER: ${ADC_PG_USER:-adc}
+      PG_PASSWORD: ${ADC_PG_PASSWORD:-adc_dev_only}
+      PG_DBNAME: ${ADC_PG_DBNAME:-adc}
+      PG_SSLMODE: disable
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks: [adc-net]
+
   adc:
     build:
       context: ..
       dockerfile: Dockerfile.adc
-    image: adc/ce:dev
+    image: ${ADC_IMAGE_PREFIX:-adc}/ce:${ADC_VERSION:-dev}
     container_name: adc-app
     restart: unless-stopped
     command: ["-seed"]
     ports:
       - "127.0.0.1:18082:8080"
     environment:
-      ADC_ENV: dev
+      ADC_ENV: ${ADC_ENV:-dev}
       ADC_LOG_LEVEL: info
       ADC_HTTP_ADDR: ":8080"
       ADC_NODE_ID: adc-node-01
@@ -179,8 +198,8 @@ services:
       ADC_TLS_CERT: ${ADC_TLS_CERT:-}
       ADC_TLS_KEY: ${ADC_TLS_KEY:-}
     depends_on:
-      postgres:
-        condition: service_healthy
+      adc-migrate:
+        condition: service_completed_successfully
       valkey:
         condition: service_healthy
     healthcheck:
@@ -194,9 +213,11 @@ services:
     build:
       context: ..
       dockerfile: Dockerfile.pyagent
-    image: adc/py-agent:dev
+    image: ${ADC_IMAGE_PREFIX:-adc}/py-agent:${ADC_VERSION:-dev}
     container_name: adc-py-agent
     restart: unless-stopped
+    environment:
+      ADC_ADMIN_INTERNAL_URL: "http://adc:8080"
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:18081/healthz')\" || exit 1"]
       interval: 10s
@@ -208,7 +229,7 @@ services:
     build:
       context: ..
       dockerfile: Dockerfile.console
-    image: adc/console:dev
+    image: ${ADC_IMAGE_PREFIX:-adc}/console:${ADC_VERSION:-dev}
     container_name: adc-console
     restart: unless-stopped
     ports:
@@ -222,7 +243,7 @@ services:
     build:
       context: ..
       dockerfile: Dockerfile.adc
-    image: adc/ce:dev
+    image: ${ADC_IMAGE_PREFIX:-adc}/ce:${ADC_VERSION:-dev}
     container_name: adc-gateway
     restart: unless-stopped
     entrypoint: ["/usr/local/bin/gateway"]

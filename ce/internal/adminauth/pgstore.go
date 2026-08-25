@@ -60,19 +60,16 @@ func (s *PGUserStore) GetByUsername(ctx context.Context, username string) (*User
 	return &u, nil
 }
 
-// GetBySubject loads the OIDC-mapped user for a subject claim
-// (design/83 C4.1). design/32 has no dedicated subject column, so the
-// subject lives in metadata.oidc_subject (written by the provisioner)
-// and the lookup is scoped to auth_source='OIDC': a LOCAL user row can
-// never be hijacked by a foreign IdP subject.
-func (s *PGUserStore) GetBySubject(ctx context.Context, subject string) (*User, error) {
+// GetByOIDCIdentity resolves only explicitly provisioned issuer + subject
+// mappings. Unknown identities are denied by the handler and never create users.
+func (s *PGUserStore) GetByOIDCIdentity(ctx context.Context, issuer, subject string) (*User, error) {
 	var u User
 	err := s.pool.QueryRow(ctx, `
-		SELECT id::text, username, COALESCE(password_hash, ''), tenant_id::text, status
-		  FROM adc_users
-		 WHERE auth_source = 'OIDC'
-		   AND metadata->>'oidc_subject' = $1
-		   AND deleted_at IS NULL`, subject).
+		SELECT u.id::text, u.username, COALESCE(u.password_hash, ''), u.tenant_id::text, u.status
+		  FROM adc_oidc_identities i
+		  JOIN adc_users u ON u.id = i.user_id
+		 WHERE i.issuer = $1 AND i.subject = $2
+		   AND u.auth_source = 'OIDC' AND u.deleted_at IS NULL`, issuer, subject).
 		Scan(&u.ID, &u.Username, &u.PasswordHash, &u.TenantID, &u.Status)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrUserNotFound

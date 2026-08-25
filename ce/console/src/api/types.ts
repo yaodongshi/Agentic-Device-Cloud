@@ -16,6 +16,17 @@ export interface LoginResponse {
   expires_at: string
 }
 
+export interface CurrentSessionResponse {
+  user_id: string
+  display_name: string
+  tenant_id: string
+  role: Role
+}
+
+export interface OIDCStatusResponse {
+  enabled: boolean
+}
+
 /** Offset pagination envelope (design/33 1.6). */
 export interface Page<T> {
   items: T[]
@@ -175,6 +186,36 @@ export interface CreateApiKeyPayload {
   name: string
   scopes: ApiKeyScopes
   expires_at?: string | null
+}
+
+export type DeveloperApplicationScope = 'a2a.tasks:read' | 'a2a.tasks:write'
+export type DeveloperApplicationStatus = 'active' | 'disabled'
+
+export interface DeveloperApplication {
+  application_id: string
+  name: string
+  purpose: string
+  status: DeveloperApplicationStatus
+  scopes: DeveloperApplicationScope[]
+  credential_id?: string
+  credential_prefix?: string
+  credential_status: 'active' | 'revoked'
+  created_at: string
+  updated_at: string
+  revoked_at?: string
+}
+
+export interface CreatedDeveloperApplication extends DeveloperApplication {
+  secret: string
+}
+
+export interface DeveloperConnectivity {
+  ok: boolean
+  application_id: string
+  tenant_id: string
+  scope: DeveloperApplicationScope
+  mode: 'credential_introspection'
+  a2a_protected: true
 }
 
 /**
