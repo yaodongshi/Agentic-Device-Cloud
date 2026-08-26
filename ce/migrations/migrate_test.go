@@ -54,6 +54,57 @@ func TestEmbeddedDeveloperApplicationMigrationContract(t *testing.T) {
 	}
 }
 
+func TestEmbeddedA2ATaskMigrationContract(t *testing.T) {
+	t.Parallel()
+	body, err := fs.ReadFile(embedded, "0008_a2a_tasks.up.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sql := string(body)
+	for _, required := range []string{
+		"CREATE TABLE adc_a2a_tasks",
+		"REFERENCES adc_tenants(id)",
+		"FOREIGN KEY (application_id, tenant_id)",
+		"REFERENCES adc_developer_applications (id, tenant_id)",
+		"uq_a2a_tasks_tenant_application_idempotency",
+		"UNIQUE (tenant_id, application_id, idempotency_key)",
+		"request_hash        CHAR(64) NOT NULL",
+		"version             BIGINT NOT NULL DEFAULT 1",
+		"'submitted','working','input-required','completed','failed','rejected'",
+		"idx_a2a_tasks_tenant_created",
+	} {
+		if !strings.Contains(sql, required) {
+			t.Errorf("0008 migration missing %q", required)
+		}
+	}
+	down, err := fs.ReadFile(embedded, "0008_a2a_tasks.down.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(down), "DROP TABLE IF EXISTS adc_a2a_tasks") {
+		t.Fatal("0008 down migration must drop adc_a2a_tasks")
+	}
+}
+
+func TestEmbeddedA2AApplicationSnapshotMigrationContract(t *testing.T) {
+	t.Parallel()
+	body, err := fs.ReadFile(embedded, "0009_a2a_application_snapshot.up.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sql := string(body)
+	for _, required := range []string{
+		"DROP CONSTRAINT IF EXISTS fk_a2a_tasks_application_tenant",
+		"DROP CONSTRAINT IF EXISTS uq_developer_applications_id_tenant",
+		"CREATE FUNCTION adc_validate_a2a_application_tenant()",
+		"CREATE TRIGGER trg_a2a_application_tenant",
+	} {
+		if !strings.Contains(sql, required) {
+			t.Errorf("0009 migration missing %q", required)
+		}
+	}
+}
+
 func TestRunAlreadyCurrentAndVersionTooHigh(t *testing.T) {
 	t.Parallel()
 	files := testMigrations(2)

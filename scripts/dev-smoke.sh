@@ -16,10 +16,22 @@ TARGET_MIGRATION_VERSION=$((10#${LATEST_MIGRATION%%_*}))
 
 BASE="${ADC_BASE_URL:-http://127.0.0.1:18080}"          # 统一 API 网关（唯一业务入口）
 DECIDE_BASE="${ADC_DECIDE_URL:-http://127.0.0.1:18082}" # adc 直连（仅 dev 决策注入）
+AGENT_API_KEY="${ADC_SMOKE_AGENT_API_KEY:-dev-agent-key}"
 if [ -z "${ADC_DEVICE_SECRET:-}" ]; then
-  ADC_DEVICE_SECRET=$(docker exec adc-app cat /tmp/adc-demo-secret 2>/dev/null || echo "")
+  PREFLIGHT_LOGIN=$(curl -sf -H "Content-Type: application/json" \
+    -d "{\"username\":\"${ADC_SMOKE_ADMIN_USER:-admin}\",\"password\":\"${ADC_SMOKE_ADMIN_PASSWORD:-admin123!}\"}" \
+    "$BASE/v1/admin/auth/login" || true)
+  PREFLIGHT_TOKEN=$(echo "$PREFLIGHT_LOGIN" | python3 -c "import json,sys; print(json.load(sys.stdin).get('token',''))" 2>/dev/null || true)
+  PREFLIGHT_TENANTS=$(curl -sf -H "Authorization: Bearer $PREFLIGHT_TOKEN" "$BASE/v1/admin/tenants?page=1&page_size=1" || true)
+  PREFLIGHT_TENANT_ID=$(echo "$PREFLIGHT_TENANTS" | python3 -c "import json,sys; items=json.load(sys.stdin).get('items',[]); print((items[0].get('tenant_id') or items[0].get('id','')) if items else '')" 2>/dev/null || true)
+  PREFLIGHT_DEVICES=$(curl -sf -H "Authorization: Bearer $PREFLIGHT_TOKEN" "$BASE/v1/admin/devices?tenant_id=$PREFLIGHT_TENANT_ID&page=1&page_size=100" || true)
+  PREFLIGHT_DEVICE_ID=$(echo "$PREFLIGHT_DEVICES" | python3 -c "import json,sys; items=json.load(sys.stdin).get('items',[]); print(next((d.get('device_id') or d.get('id','') for d in items if d.get('device_code')=='cnc-demo-01'),''))" 2>/dev/null || true)
+  PREFLIGHT_RESET=$(curl -sf -X PATCH -H "Authorization: Bearer $PREFLIGHT_TOKEN" -H "Content-Type: application/json" \
+    -d '{"op":"reset_credential","change_reason":"runtime smoke credential rotation"}' \
+    "$BASE/v1/admin/devices/$PREFLIGHT_DEVICE_ID?tenant_id=$PREFLIGHT_TENANT_ID" || true)
+  ADC_DEVICE_SECRET=$(echo "$PREFLIGHT_RESET" | python3 -c "import json,sys; print(json.load(sys.stdin).get('credential',{}).get('secret',''))" 2>/dev/null || true)
 fi
-[ -n "$ADC_DEVICE_SECRET" ] || { echo "无法获取设备密钥（容器未运行或未 seed）"; exit 1; }
+[ -n "$ADC_DEVICE_SECRET" ] || { echo "无法通过管理 API 轮换 smoke 设备凭证"; exit 1; }
 PASS=0; FAIL=0; SKIP=0
 
 step() { echo "--- $1"; }
@@ -41,12 +53,12 @@ if kill -0 $MOCK_PID 2>/dev/null; then ok "mock 设备在线（经网关 WSS 透
 
 # 3. Agent 查询工具列表
 step "3. Agent tools/list"
-TOOLS=$(curl -sf -H "X-ADC-Key: dev-agent-key" "$BASE/v1/agent/mcp/tools")
+TOOLS=$(curl -sf -H "X-ADC-Key: $AGENT_API_KEY" "$BASE/v1/agent/mcp/tools")
 echo "$TOOLS" | grep -q "cnc-demo-01__set_spindle_speed" && ok "聚合工具可见" || bad "聚合工具缺失: $TOOLS"
 
 # 4. 高危调用 → 202 + ticket
 step "4. 高危调用触发 HITL"
-RESP=$(curl -s -H "X-ADC-Key: dev-agent-key" -H "Content-Type: application/json" \
+RESP=$(curl -s -H "X-ADC-Key: $AGENT_API_KEY" -H "Content-Type: application/json" \
   -d '{"name":"cnc-demo-01::set_spindle_speed","arguments":{"rpm":3000}}' \
   "$BASE/v1/agent/mcp/tools/call")
 echo "$RESP"
@@ -56,7 +68,7 @@ TICKET_ID=$(echo "$RESP" | python3 -c "import json,sys; print(json.load(sys.stdi
 
 # 5. 审批前轮询应保持 pending
 step "5. 审批前轮询"
-CODE=$(curl -s -o /dev/null -w '%{http_code}' -H "X-ADC-Key: dev-agent-key" "$BASE/v1/agent/mcp/tools/call/$REQ_ID")
+CODE=$(curl -s -o /dev/null -w '%{http_code}' -H "X-ADC-Key: $AGENT_API_KEY" "$BASE/v1/agent/mcp/tools/call/$REQ_ID")
 [ "$CODE" = "202" ] && ok "pending 状态 202" || bad "期望 202 得到 $CODE"
 
 # 6. 审批同意（dev 决策注入直连 adc）
@@ -68,7 +80,7 @@ curl -sf -X POST -H "Content-Type: application/json" \
 step "7. 轮询执行结果"
 RESULT=""
 for i in $(seq 1 20); do
-  CODE=$(curl -s -o /tmp/adc-call-result.json -w '%{http_code}' -H "X-ADC-Key: dev-agent-key" "$BASE/v1/agent/mcp/tools/call/$REQ_ID")
+  CODE=$(curl -s -o /tmp/adc-call-result.json -w '%{http_code}' -H "X-ADC-Key: $AGENT_API_KEY" "$BASE/v1/agent/mcp/tools/call/$REQ_ID")
   if [ "$CODE" = "200" ]; then RESULT=$(cat /tmp/adc-call-result.json); break; fi
   sleep 0.2
 done
@@ -76,7 +88,7 @@ echo "$RESULT" | grep -q "set_spindle_speed" && ok "执行结果返回: $RESULT"
 
 # 8. 拒绝路径验证（第二次调用 → 拒绝 → BLOCKED_BY_HITL）
 step "8. 拒绝路径 BLOCKED_BY_HITL"
-RESP2=$(curl -s -H "X-ADC-Key: dev-agent-key" -H "Content-Type: application/json" \
+RESP2=$(curl -s -H "X-ADC-Key: $AGENT_API_KEY" -H "Content-Type: application/json" \
   -d '{"name":"cnc-demo-01::set_spindle_speed","arguments":{"rpm":9999}}' \
   "$BASE/v1/agent/mcp/tools/call")
 REQ2=$(echo "$RESP2" | python3 -c "import json,sys; print(json.load(sys.stdin).get('request_id',''))" 2>/dev/null || echo "")
@@ -84,7 +96,7 @@ TICKET2=$(echo "$RESP2" | python3 -c "import json,sys; print(json.load(sys.stdin
 curl -sf -X POST -H "Content-Type: application/json" \
   -d "{\"ticket_id\":\"$TICKET2\",\"decision\":\"reject\"}" "$DECIDE_BASE/dev/decide" >/dev/null
 sleep 0.5
-BODY=$(curl -s -H "X-ADC-Key: dev-agent-key" "$BASE/v1/agent/mcp/tools/call/$REQ2")
+BODY=$(curl -s -H "X-ADC-Key: $AGENT_API_KEY" "$BASE/v1/agent/mcp/tools/call/$REQ2")
 echo "$BODY" | grep -q "BLOCKED_BY_HITL" && ok "拒绝后 BLOCKED_BY_HITL" || bad "拒绝路径失败: $BODY"
 
 # 9. 鉴权失败（SEC-02）
@@ -160,14 +172,52 @@ else
     && ok "预算状态契约可用" || bad "预算状态异常: $BUDGET"
 fi
 
-# 15. 参数校验：运行态无法在不修改 seed 的前提下稳定注入 schema 边界，使用专门单测门禁。
-step "15. 工具参数校验"
-if (cd ce && go test ./internal/agentapi -run 'TestParamGuardRejects(MissingRequired|TypeError|RangeViolation)$' -count=1 >/dev/null); then
-  skip "未构造运行态 schema 边界；参数缺失、类型和范围拒绝已由 agentapi 单测门禁验证"
+# 15. 参数 guard 四路径：真实 HTTP，并确认三类拒绝不创建审批工单。
+step "15. 工具参数 guard 四路径"
+ticket_count() {
+  docker exec adc-postgres psql -U "${ADC_PG_USER:-adc}" -d "${ADC_PG_DBNAME:-adc}" -Atc \
+    "SELECT count(*) FROM adc_approval_tickets;" 2>/dev/null || printf 'unavailable'
+}
+guard_case() {
+  label=$1
+  payload=$2
+  expected=$3
+  before=$(ticket_count)
+  code=$(curl -s -o /tmp/adc-guard-response.json -w '%{http_code}' \
+    -H "X-ADC-Key: $AGENT_API_KEY" -H "Content-Type: application/json" \
+    -d "$payload" "$BASE/v1/agent/mcp/tools/call" || true)
+  after=$(ticket_count)
+  if [ "$code" = "$expected" ] && [ "$before" = "$after" ]; then
+    ok "$label 返回 $expected 且审批工单数保持 $after"
+  else
+    bad "$label 期望 HTTP ${expected} 且工单数不增加，实际 HTTP ${code}、${before} -> ${after}"
+  fi
+}
+
+guard_case "缺失必填参数" '{"name":"cnc-demo-01::set_spindle_speed","arguments":{}}' 400
+guard_case "参数类型错误" '{"name":"cnc-demo-01::set_spindle_speed","arguments":{"rpm":"fast"}}' 400
+guard_case "参数范围越界" '{"name":"cnc-demo-01::set_spindle_speed","arguments":{"rpm":12001}}' 400
+
+before=$(ticket_count)
+valid_rpm=$(docker exec adc-postgres psql -U "${ADC_PG_USER:-adc}" -d "${ADC_PG_DBNAME:-adc}" -Atc \
+  "SELECT rpm FROM generate_series(1,12000) AS rpm
+   WHERE NOT EXISTS (
+     SELECT 1 FROM adc_approval_tickets
+     WHERE status='PENDING' AND tool_name='set_spindle_speed'
+       AND (arguments->>'rpm')::numeric=rpm
+   ) LIMIT 1;" 2>/dev/null || true)
+[ -n "$valid_rpm" ] || { bad "无法构造未使用的合法 rpm"; valid_rpm=6000; }
+valid_code=$(curl -s -o /tmp/adc-guard-response.json -w '%{http_code}' \
+  -H "X-ADC-Key: dev-agent-key" -H "Content-Type: application/json" \
+  -d "{\"name\":\"cnc-demo-01::set_spindle_speed\",\"arguments\":{\"rpm\":${valid_rpm}}}" \
+  "$BASE/v1/agent/mcp/tools/call" || true)
+after=$(ticket_count)
+if [ "$valid_code" = "202" ] && [ "$before" != "unavailable" ] && [ "$after" -eq $((before + 1)) ]; then
+  ok "合法高危参数进入 HITL，HTTP 202 且审批工单数增加"
 else
-  bad "参数校验单测门禁失败"
+  bad "合法参数期望 HTTP 202 且工单数增加，实际 HTTP ${valid_code}、${before} -> ${after}"
 fi
 
 echo
 echo "========== SMOKE 结果: PASS=$PASS FAIL=$FAIL SKIP=$SKIP =========="
-[ "$FAIL" -eq 0 ] || exit 1
+[ "$FAIL" -eq 0 ] && [ "$SKIP" -eq 0 ] || exit 1

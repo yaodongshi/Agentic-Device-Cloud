@@ -28,6 +28,15 @@ const seedAGVUUID = "bbbbbbbb-cccc-dddd-eeee-ffffffffffff"
 
 var seedKEK = []byte("0123456789abcdef0123456789abcdef")
 
+var testSeedSecrets = devSeedSecrets{
+	CNCDevice:      strings.Repeat("a", 64),
+	AGVDevice:      strings.Repeat("b", 64),
+	AdminPassword:  "admin-explicit-password",
+	TenantPassword: "tenant-explicit-password",
+	ApproverPass:   "approver-explicit-password",
+	AgentAPIKey:    "adc_1234abcd_" + strings.Repeat("c", 64),
+}
+
 // fakeKeyRepo records the issued NewKey and returns a fixed record.
 type fakeKeyRepo struct {
 	issued *adminapi.NewKey
@@ -91,36 +100,31 @@ func expectSeedCommon(m pgxmock.PgxPoolIface, keyExists bool, auditExists bool) 
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 	m.ExpectQuery(regexp.QuoteMeta(`SELECT id::text FROM adc_tenants WHERE code='tenant-demo'`)).
 		WillReturnRows(pgxmock.NewRows([]string{"id"}).AddRow(seedTenantUUID))
-	m.ExpectExec(regexp.QuoteMeta(`UPDATE adc_devices SET credential_hash=$1, auth_type='hmac', device_class='B'
-		WHERE device_code='cnc-demo-01'`)).
-		WithArgs(pgxmock.AnyArg()).
-		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 	m.ExpectExec(regexp.QuoteMeta(`INSERT INTO adc_devices (id, tenant_id, device_code, name, device_type, device_class, auth_type, credential_hash, status)
 		SELECT gen_random_uuid(), id, 'cnc-demo-01', 'Demo CNC', 'cnc', 'B', 'hmac', $1, 'OFFLINE'
 		FROM adc_tenants WHERE code='tenant-demo'
 		AND NOT EXISTS (SELECT 1 FROM adc_devices WHERE device_code='cnc-demo-01')`)).
 		WithArgs(pgxmock.AnyArg()).
-		WillReturnResult(pgxmock.NewResult("INSERT", 1))
-	m.ExpectExec(regexp.QuoteMeta(`INSERT INTO adc_device_tools (id, tenant_id, device_id, tool_name, description, input_schema, risk_level, is_enabled)
-		SELECT gen_random_uuid(), d.tenant_id, d.id, 'set_spindle_speed', 'Set CNC spindle RPM (high risk)', '{"type":"object","properties":{"rpm":{"type":"number"}}}', 2, true
+		WillReturnResult(pgxmock.NewResult("INSERT", map[bool]int64{true: 0, false: 1}[keyExists]))
+	m.ExpectExec(regexp.QuoteMeta(`INSERT INTO adc_device_tools (id, tenant_id, device_id, tool_name, description, input_schema, annotations, risk_level, is_enabled)
+		SELECT gen_random_uuid(), d.tenant_id, d.id, 'set_spindle_speed', 'Set CNC spindle RPM (high risk)', '{"type":"object","properties":{"rpm":{"type":"number"}},"required":["rpm"]}', '{"adc_param_rules":{"rpm":{"min":0,"max":12000}}}', 2, true
 		FROM adc_devices d WHERE d.device_code='cnc-demo-01'
-		AND NOT EXISTS (SELECT 1 FROM adc_device_tools t WHERE t.device_id=d.id AND t.tool_name='set_spindle_speed')`)).
+		ON CONFLICT (device_id, tool_name) DO UPDATE
+		SET input_schema=EXCLUDED.input_schema,
+			annotations=jsonb_set(COALESCE(adc_device_tools.annotations, '{}'), '{adc_param_rules}',
+			COALESCE(adc_device_tools.annotations->'adc_param_rules', '{}') || '{"rpm":{"min":0,"max":12000}}', true)`)).
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 	m.ExpectExec(regexp.QuoteMeta(`INSERT INTO adc_device_tools (id, tenant_id, device_id, tool_name, description, input_schema, risk_level, is_enabled)
 		SELECT gen_random_uuid(), d.tenant_id, d.id, 'get_spindle_status', 'Read CNC spindle RPM (read-only)', '{"type":"object"}', 0, true
 		FROM adc_devices d WHERE d.device_code='cnc-demo-01'
 		AND NOT EXISTS (SELECT 1 FROM adc_device_tools t WHERE t.device_id=d.id AND t.tool_name='get_spindle_status')`)).
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
-	m.ExpectExec(regexp.QuoteMeta(`UPDATE adc_devices SET credential_hash=$1, auth_type='hmac', device_class='B'
-		WHERE device_code='agv-demo-01'`)).
-		WithArgs(pgxmock.AnyArg()).
-		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 	m.ExpectExec(regexp.QuoteMeta(`INSERT INTO adc_devices (id, tenant_id, device_code, name, device_type, device_class, auth_type, credential_hash, status)
 		SELECT gen_random_uuid(), id, 'agv-demo-01', 'Demo AGV', 'agv', 'B', 'hmac', $1, 'OFFLINE'
 		FROM adc_tenants WHERE code='tenant-demo'
 		AND NOT EXISTS (SELECT 1 FROM adc_devices WHERE device_code='agv-demo-01')`)).
 		WithArgs(pgxmock.AnyArg()).
-		WillReturnResult(pgxmock.NewResult("INSERT", 1))
+		WillReturnResult(pgxmock.NewResult("INSERT", map[bool]int64{true: 0, false: 1}[keyExists]))
 	m.ExpectExec(regexp.QuoteMeta(`INSERT INTO adc_device_tools (id, tenant_id, device_id, tool_name, description, input_schema, risk_level, is_enabled)
 		SELECT gen_random_uuid(), d.tenant_id, d.id, 'move_to', 'Move AGV to a warehouse location (high risk)', '{"type":"object","properties":{"location":{"type":"string"}},"required":["location"]}', 2, true
 		FROM adc_devices d WHERE d.device_code='agv-demo-01'
@@ -154,11 +158,6 @@ func expectSeedCommon(m pgxmock.PgxPoolIface, keyExists bool, auditExists bool) 
 		ON CONFLICT DO NOTHING`)).
 		WithArgs(pgxmock.AnyArg()).
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
-	m.ExpectExec(regexp.QuoteMeta(`UPDATE adc_users
-		SET password_hash=$1, status='ACTIVE', updated_at=now()
-		WHERE username='admin' AND deleted_at IS NULL`)).
-		WithArgs(pgxmock.AnyArg()).
-		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 	m.ExpectExec(regexp.QuoteMeta(`INSERT INTO adc_user_roles (user_id, role_id, tenant_id)
 		SELECT u.id, r.id, u.tenant_id FROM adc_users u
 		JOIN adc_roles r ON r.role_code='PLATFORM_ADMIN' AND r.scope='PLATFORM'
@@ -173,11 +172,6 @@ func expectSeedCommon(m pgxmock.PgxPoolIface, keyExists bool, auditExists bool) 
 		ON CONFLICT DO NOTHING`)).
 			WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg()).
 			WillReturnResult(pgxmock.NewResult("INSERT", 1))
-		m.ExpectExec(regexp.QuoteMeta(`UPDATE adc_users
-		SET password_hash=$1, status='ACTIVE', updated_at=now()
-		WHERE username=$2 AND deleted_at IS NULL`)).
-			WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg()).
-			WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 		m.ExpectExec(regexp.QuoteMeta(`INSERT INTO adc_user_roles (user_id, role_id, tenant_id)
 		SELECT u.id, r.id, u.tenant_id FROM adc_users u
 		JOIN adc_roles r ON r.role_code=$1 AND r.tenant_id = u.tenant_id
@@ -218,7 +212,7 @@ func TestSeedDemoFullRun(t *testing.T) {
 	tickets := &fakeTicketRepo{}
 	sink := &fakeAuditSink{}
 	demo, err := seedDemo(context.Background(), seedDemoInput{
-		dbx: m, kek: seedKEK, keys: keys, tickets: tickets, sink: sink,
+		dbx: m, kek: seedKEK, keys: keys, tickets: tickets, sink: sink, secrets: testSeedSecrets,
 	})
 	if err != nil {
 		t.Fatalf("seedDemo: %v", err)
@@ -276,7 +270,7 @@ func TestSeedDemoIdempotentRerun(t *testing.T) {
 	tickets := &fakeTicketRepo{dedup: true}
 	sink := &fakeAuditSink{}
 	demo, err := seedDemo(context.Background(), seedDemoInput{
-		dbx: m, kek: seedKEK, keys: keys, tickets: tickets, sink: sink,
+		dbx: m, kek: seedKEK, keys: keys, tickets: tickets, sink: sink, secrets: testSeedSecrets,
 	})
 	if err != nil {
 		t.Fatalf("seedDemo: %v", err)
@@ -307,7 +301,7 @@ func TestSeedDemoNilSinkSkipsAudit(t *testing.T) {
 	expectSeedCommon(m, true, false)
 
 	demo, err := seedDemo(context.Background(), seedDemoInput{
-		dbx: m, kek: seedKEK, keys: &fakeKeyRepo{}, tickets: &fakeTicketRepo{}, sink: nil,
+		dbx: m, kek: seedKEK, keys: &fakeKeyRepo{}, tickets: &fakeTicketRepo{}, sink: nil, secrets: testSeedSecrets,
 	})
 	if err != nil {
 		t.Fatalf("seedDemo: %v", err)
@@ -317,10 +311,10 @@ func TestSeedDemoNilSinkSkipsAudit(t *testing.T) {
 	}
 }
 
-func TestGenerateDemoKeyMaterial(t *testing.T) {
-	keyID, prefix, secret, keyHash, secretHash, err := generateDemoKeyMaterial()
+func TestParseDemoKeyMaterial(t *testing.T) {
+	keyID, prefix, secret, keyHash, secretHash, err := parseDemoKeyMaterial(testSeedSecrets.AgentAPIKey)
 	if err != nil {
-		t.Fatalf("generateDemoKeyMaterial: %v", err)
+		t.Fatalf("parseDemoKeyMaterial: %v", err)
 	}
 	if len(keyID) != 8 || prefix != "adc_"+keyID || len(secret) != 64 {
 		t.Fatalf("unexpected material: %s %s %s", keyID, prefix, secret)

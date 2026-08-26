@@ -15,7 +15,6 @@ package adminauth
 import (
 	"context"
 	"errors"
-	"strings"
 
 	"github.com/jackc/pgx/v5"
 )
@@ -44,17 +43,25 @@ func NewPGUserStore(pool poolQueryer) *PGUserStore {
 func (s *PGUserStore) GetByUsername(ctx context.Context, username string) (*User, error) {
 	var u User
 	err := s.pool.QueryRow(ctx, `
-		SELECT id::text, username, COALESCE(password_hash, ''), tenant_id::text, status
-		  FROM adc_users
-		 WHERE username = $1 AND deleted_at IS NULL`, username).
-		Scan(&u.ID, &u.Username, &u.PasswordHash, &u.TenantID, &u.Status)
+		SELECT u.id::text, u.username, COALESCE(u.password_hash, ''), u.tenant_id::text,
+		       u.status, t.status, u.authz_version,
+		       COALESCE(array_agg(lower(r.role_code) ORDER BY r.role_code)
+		           FILTER (WHERE r.id IS NOT NULL), ARRAY[]::text[])
+		  FROM adc_users u
+		  JOIN adc_tenants t ON t.id = u.tenant_id
+		  LEFT JOIN adc_user_roles ur ON ur.user_id = u.id
+		       AND (ur.expires_at IS NULL OR ur.expires_at > now())
+		  LEFT JOIN adc_roles r ON r.id = ur.role_id
+		 WHERE u.username = $1 AND u.deleted_at IS NULL AND t.deleted_at IS NULL
+		 GROUP BY u.id, t.status
+		HAVING bool_and(r.id IS NULL OR (ur.tenant_id = u.tenant_id AND
+		       ((r.scope = 'PLATFORM' AND r.tenant_id IS NULL) OR
+		        (r.scope = 'TENANT' AND r.tenant_id = u.tenant_id))))`, username).
+		Scan(&u.ID, &u.Username, &u.PasswordHash, &u.TenantID, &u.Status, &u.TenantStatus, &u.AuthzVersion, &u.Roles)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrUserNotFound
 	}
 	if err != nil {
-		return nil, err
-	}
-	if err := s.loadRoles(ctx, &u); err != nil {
 		return nil, err
 	}
 	return &u, nil
@@ -65,42 +72,58 @@ func (s *PGUserStore) GetByUsername(ctx context.Context, username string) (*User
 func (s *PGUserStore) GetByOIDCIdentity(ctx context.Context, issuer, subject string) (*User, error) {
 	var u User
 	err := s.pool.QueryRow(ctx, `
-		SELECT u.id::text, u.username, COALESCE(u.password_hash, ''), u.tenant_id::text, u.status
+		SELECT u.id::text, u.username, COALESCE(u.password_hash, ''), u.tenant_id::text,
+		       u.status, t.status, u.authz_version,
+		       COALESCE(array_agg(lower(r.role_code) ORDER BY r.role_code)
+		           FILTER (WHERE r.id IS NOT NULL), ARRAY[]::text[])
 		  FROM adc_oidc_identities i
 		  JOIN adc_users u ON u.id = i.user_id
+		  JOIN adc_tenants t ON t.id = u.tenant_id
+		  LEFT JOIN adc_user_roles ur ON ur.user_id = u.id
+		       AND (ur.expires_at IS NULL OR ur.expires_at > now())
+		  LEFT JOIN adc_roles r ON r.id = ur.role_id
 		 WHERE i.issuer = $1 AND i.subject = $2
-		   AND u.auth_source = 'OIDC' AND u.deleted_at IS NULL`, issuer, subject).
-		Scan(&u.ID, &u.Username, &u.PasswordHash, &u.TenantID, &u.Status)
+		   AND u.auth_source = 'OIDC' AND u.deleted_at IS NULL AND t.deleted_at IS NULL
+		 GROUP BY u.id, t.status
+		HAVING bool_and(r.id IS NULL OR (ur.tenant_id = u.tenant_id AND
+		       ((r.scope = 'PLATFORM' AND r.tenant_id IS NULL) OR
+		        (r.scope = 'TENANT' AND r.tenant_id = u.tenant_id))))`, issuer, subject).
+		Scan(&u.ID, &u.Username, &u.PasswordHash, &u.TenantID, &u.Status, &u.TenantStatus, &u.AuthzVersion, &u.Roles)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrUserNotFound
 	}
 	if err != nil {
 		return nil, err
 	}
-	if err := s.loadRoles(ctx, &u); err != nil {
-		return nil, err
-	}
 	return &u, nil
 }
 
-// loadRoles fills u.Roles from adc_user_roles/adc_roles, normalizing
-// role codes to lowercase (see the package comment).
-func (s *PGUserStore) loadRoles(ctx context.Context, u *User) error {
-	rows, err := s.pool.Query(ctx, `
-		SELECT r.role_code
-		  FROM adc_user_roles ur
-		  JOIN adc_roles r ON r.id = ur.role_id
-		 WHERE ur.user_id = $1::uuid`, u.ID)
+// CurrentAuthorization loads the complete current authorization snapshot in
+// one statement, using PostgreSQL now() as the role-expiry authority.
+func (s *PGUserStore) CurrentAuthorization(ctx context.Context, userID, tenantID string) (*AuthorizationSnapshot, error) {
+	var snapshot AuthorizationSnapshot
+	err := s.pool.QueryRow(ctx, `
+		SELECT u.status, u.deleted_at IS NOT NULL, t.status, t.deleted_at IS NOT NULL,
+		       u.authz_version,
+		       COALESCE(array_agg(lower(r.role_code) ORDER BY r.role_code)
+		           FILTER (WHERE r.id IS NOT NULL), ARRAY[]::text[])
+		  FROM adc_users u
+		  JOIN adc_tenants t ON t.id = u.tenant_id
+		  LEFT JOIN adc_user_roles ur ON ur.user_id = u.id
+		       AND (ur.expires_at IS NULL OR ur.expires_at > now())
+		  LEFT JOIN adc_roles r ON r.id = ur.role_id
+		 WHERE u.id = $1::uuid AND u.tenant_id = $2::uuid
+		 GROUP BY u.id, t.id
+		HAVING bool_and(r.id IS NULL OR (ur.tenant_id = u.tenant_id AND
+		       ((r.scope = 'PLATFORM' AND r.tenant_id IS NULL) OR
+		        (r.scope = 'TENANT' AND r.tenant_id = u.tenant_id))))`, userID, tenantID).
+		Scan(&snapshot.UserStatus, &snapshot.UserDeleted, &snapshot.TenantStatus,
+			&snapshot.TenantDeleted, &snapshot.AuthzVersion, &snapshot.Roles)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrAuthorizationInvalid
+	}
 	if err != nil {
-		return err
+		return nil, err
 	}
-	defer rows.Close()
-	for rows.Next() {
-		var role string
-		if err := rows.Scan(&role); err != nil {
-			return err
-		}
-		u.Roles = append(u.Roles, strings.ToLower(role))
-	}
-	return rows.Err()
+	return &snapshot, nil
 }

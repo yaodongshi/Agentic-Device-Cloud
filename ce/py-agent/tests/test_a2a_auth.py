@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import httpx
-from app.a2a import SCOPE_TASKS_READ, SCOPE_TASKS_WRITE
+from app.auth import SCOPE_TASKS_READ, SCOPE_TASKS_WRITE
 from app.main import create_app
 from fastapi.testclient import TestClient
+
+from tests.task_store import MemoryTaskStore
 
 revoked_credentials: set[str] = set()
 
@@ -39,11 +41,16 @@ def auth_backend(request: httpx.Request) -> httpx.Response:
 
 def client() -> TestClient:
     revoked_credentials.clear()
-    return TestClient(create_app(auth_transport=httpx.MockTransport(auth_backend)))
+    return TestClient(
+        create_app(auth_transport=httpx.MockTransport(auth_backend), task_store=MemoryTaskStore())
+    )
 
 
 def headers(credential: str) -> dict[str, str]:
-    return {"X-ADC-Application-Credential": credential}
+    return {
+        "X-ADC-Application-Credential": credential,
+        "Idempotency-Key": credential + "-key",
+    }
 
 
 def task_payload(**extra: str) -> dict[str, object]:
@@ -82,7 +89,26 @@ def test_read_and_write_scopes_are_enforced() -> None:
     )
 
 
-def test_approve_and_reject_require_write_scope() -> None:
+def test_create_requires_idempotency_key_and_replays_same_request() -> None:
+    api = client()
+    credential_only = {"X-ADC-Application-Credential": "tenant-a-both"}
+    assert (
+        api.post("/v2/agents/a2a/tasks", headers=credential_only, json=task_payload()).status_code
+        == 400
+    )
+    first = api.post("/v2/agents/a2a/tasks", headers=headers("tenant-a-both"), json=task_payload())
+    replay = api.post("/v2/agents/a2a/tasks", headers=headers("tenant-a-both"), json=task_payload())
+    assert replay.status_code == 202
+    assert replay.json()["task_id"] == first.json()["task_id"]
+    conflict = api.post(
+        "/v2/agents/a2a/tasks",
+        headers=headers("tenant-a-both"),
+        json=task_payload(goal="different goal"),
+    )
+    assert conflict.status_code == 409
+
+
+def test_machine_decision_is_always_forbidden() -> None:
     api = client()
     first = api.post(
         "/v2/agents/a2a/tasks", headers=headers("tenant-a-both"), json=task_payload()
@@ -97,19 +123,7 @@ def test_approve_and_reject_require_write_scope() -> None:
     approved = api.post(
         decision_url, headers=headers("tenant-a-both"), json={"decision": "approve"}
     )
-    assert approved.status_code == 200
-    assert approved.json()["state"] == "completed"
-
-    second = api.post(
-        "/v2/agents/a2a/tasks", headers=headers("tenant-a-both"), json=task_payload()
-    ).json()
-    rejected = api.post(
-        f"/v2/agents/a2a/tasks/{second['task_id']}/decision",
-        headers=headers("tenant-a-both"),
-        json={"decision": "reject", "reason": "maintenance window closed"},
-    )
-    assert rejected.status_code == 200
-    assert rejected.json()["state"] == "rejected"
+    assert approved.status_code == 403
 
 
 def test_bearer_credential_is_forwarded_to_introspection() -> None:
@@ -148,7 +162,7 @@ def test_tenant_and_application_are_server_injected_and_isolated() -> None:
             headers=headers("tenant-b-both"),
             json={"decision": "reject"},
         ).status_code
-        == 404
+        == 403
     )
     listed = api.get("/v2/agents/a2a/tasks", headers=headers("tenant-b-both"))
     assert listed.status_code == 200
@@ -170,7 +184,9 @@ def test_introspection_failure_fails_closed() -> None:
     def unavailable(_request: httpx.Request) -> httpx.Response:
         return httpx.Response(500)
 
-    api = TestClient(create_app(auth_transport=httpx.MockTransport(unavailable)))
+    api = TestClient(
+        create_app(auth_transport=httpx.MockTransport(unavailable), task_store=MemoryTaskStore())
+    )
     assert api.get("/v2/agents/a2a/tasks", headers=headers("tenant-a-both")).status_code == 503
 
 
@@ -186,5 +202,7 @@ def test_inactive_introspection_response_fails_closed() -> None:
             },
         )
 
-    api = TestClient(create_app(auth_transport=httpx.MockTransport(inactive)))
+    api = TestClient(
+        create_app(auth_transport=httpx.MockTransport(inactive), task_store=MemoryTaskStore())
+    )
     assert api.get("/v2/agents/a2a/tasks", headers=headers("tenant-a-read")).status_code == 503

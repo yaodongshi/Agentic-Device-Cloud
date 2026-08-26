@@ -23,9 +23,20 @@ import (
 const (
 	ApplicationScopeTasksRead  = "a2a.tasks:read"
 	ApplicationScopeTasksWrite = "a2a.tasks:write"
+	ApplicationScopeLLMInvoke  = "llm:invoke"
+	ApplicationScopeEvalsRead  = "evals:read"
+	ApplicationScopeEvalsWrite = "evals:write"
 	applicationStatusActive    = "ACTIVE"
 	applicationStatusDisabled  = "DISABLED"
 )
+
+var applicationScopes = map[string]struct{}{
+	ApplicationScopeTasksRead:  {},
+	ApplicationScopeTasksWrite: {},
+	ApplicationScopeLLMInvoke:  {},
+	ApplicationScopeEvalsRead:  {},
+	ApplicationScopeEvalsWrite: {},
+}
 
 var (
 	ErrApplicationNotFound = errors.New("adminapi: developer application not found")
@@ -101,7 +112,7 @@ func normalizeApplicationScopes(in []string) ([]string, bool) {
 	seen := map[string]bool{}
 	out := make([]string, 0, len(in))
 	for _, scope := range in {
-		if scope != ApplicationScopeTasksRead && scope != ApplicationScopeTasksWrite {
+		if _, ok := applicationScopes[scope]; !ok {
 			return nil, false
 		}
 		if !seen[scope] {
@@ -383,7 +394,7 @@ func (s *Server) handleApplicationIntrospection(w http.ResponseWriter, r *http.R
 	if !decodeJSON(w, r, &req) {
 		return
 	}
-	if req.RequiredScope != ApplicationScopeTasksRead && req.RequiredScope != ApplicationScopeTasksWrite {
+	if _, ok := applicationScopes[req.RequiredScope]; !ok {
 		writeError(w, r, http.StatusBadRequest, codeBadRequest, "invalid required_scope")
 		return
 	}

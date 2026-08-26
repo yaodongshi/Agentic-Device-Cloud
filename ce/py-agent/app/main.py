@@ -1,28 +1,28 @@
-"""FastAPI assembly for the ADC Python agent plane.
-
-V1.0 exposes only the eval-harness subset under /v2/agents/evals/* plus
-health/readiness probes; every other /v2/agents/* route answers 503
-(LLD 3.6.1 version boundary).
-"""
+"""FastAPI assembly for the authenticated ADC Python agent plane."""
 
 from __future__ import annotations
 
 import os
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Annotated
 
 import httpx
 from evals.harness import EvalHarness
 from evals.models import EvalReport, EvalRunSpec
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import JSONResponse
+from fastapi import Depends, FastAPI, HTTPException
 
-from app.a2a import (
-    DEFAULT_ADMIN_INTERNAL_URL,
-    Introspector,
-    build_agent_card,
-    introspect_application,
-)
+from app.a2a import PostgresTaskStore, TaskStore, build_agent_card
 from app.a2a import router as a2a_router
+from app.auth import (
+    DEFAULT_ADMIN_INTERNAL_URL,
+    ApplicationPrincipal,
+    Introspector,
+    introspect_application,
+    require_evals_read,
+    require_evals_write,
+)
 from app.llm_router import router as llm_router
 
 DEFAULT_SUITES_DIR_ENV = "ADC_EVAL_SUITES_DIR"
@@ -34,15 +34,38 @@ def create_app(
     admin_internal_url: str | None = None,
     introspector: Introspector = introspect_application,
     auth_transport: httpx.AsyncBaseTransport | None = None,
+    task_store: TaskStore | None = None,
 ) -> FastAPI:
     """Assemble the application with its own harness instance."""
     harness = EvalHarness(suites_dir or Path(os.environ.get(DEFAULT_SUITES_DIR_ENV, "suites")))
-    app = FastAPI(title="ADC Python Agent Plane", version="0.1.0")
+    store = (
+        task_store
+        if task_store is not None
+        else PostgresTaskStore(os.environ.get("DATABASE_URL", ""))
+    )
+
+    @asynccontextmanager
+    async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+        await store.start()
+        try:
+            yield
+        finally:
+            await store.close()
+
+    app = FastAPI(
+        title="ADC Python Agent Plane",
+        version="0.1.0",
+        lifespan=lifespan,
+        docs_url=None,
+        redoc_url=None,
+        openapi_url=None,
+    )
     app.state.admin_internal_url = admin_internal_url or os.environ.get(
         "ADC_ADMIN_INTERNAL_URL", DEFAULT_ADMIN_INTERNAL_URL
     )
     app.state.introspector = introspector
     app.state.auth_transport = auth_transport
+    app.state.task_store = store
     app.include_router(llm_router)
     app.include_router(a2a_router)
 
@@ -55,37 +78,44 @@ def create_app(
         return {"status": "ok"}
 
     @app.get("/readyz")
-    def readyz() -> dict[str, str]:
+    async def readyz() -> dict[str, str]:
+        if not await store.ready():
+            raise HTTPException(status_code=503, detail="A2A task store unavailable")
         return {"status": "ok"}
 
     @app.get("/v2/agents/evals/suites")
-    def list_suites() -> dict[str, list[str]]:
+    def list_suites(
+        _principal: Annotated[ApplicationPrincipal, Depends(require_evals_read)],
+    ) -> dict[str, list[str]]:
         return {"suites": harness.list_suites()}
 
     @app.get("/v2/agents/evals/suites/{name}", response_model=EvalRunSpec)
-    def get_suite(name: str) -> EvalRunSpec:
+    def get_suite(
+        name: str,
+        _principal: Annotated[ApplicationPrincipal, Depends(require_evals_read)],
+    ) -> EvalRunSpec:
         try:
             return harness.load_suite(name)
         except FileNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     @app.post("/v2/agents/evals/runs", response_model=EvalReport, status_code=201)
-    def create_run(spec: EvalRunSpec) -> EvalReport:
-        return harness.run(spec)
+    def create_run(
+        spec: EvalRunSpec,
+        principal: Annotated[ApplicationPrincipal, Depends(require_evals_write)],
+    ) -> EvalReport:
+        authenticated_spec = spec.model_copy(update={"tenant": principal.tenant_id})
+        return harness.run(authenticated_spec, principal.tenant_id, principal.application_id)
 
     @app.get("/v2/agents/evals/runs/{run_id}", response_model=EvalReport)
-    def get_run(run_id: str) -> EvalReport:
-        report = harness.report(run_id)
+    def get_run(
+        run_id: str,
+        principal: Annotated[ApplicationPrincipal, Depends(require_evals_read)],
+    ) -> EvalReport:
+        report = harness.report(run_id, principal.tenant_id, principal.application_id)
         if report is None:
             raise HTTPException(status_code=404, detail=f"run not found: {run_id}")
         return report
-
-    @app.api_route("/v2/agents/{path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE"])
-    def agent_plane_not_ready(path: str) -> JSONResponse:
-        return JSONResponse(
-            status_code=503,
-            content={"detail": f"agent plane endpoint not available in V1.0: /v2/agents/{path}"},
-        )
 
     return app
 

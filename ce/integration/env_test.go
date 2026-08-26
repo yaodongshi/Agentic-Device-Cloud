@@ -139,12 +139,14 @@ func newTestEnv(ctx context.Context, pool *db.Pool, rdb *redis.Client) (*testEnv
 
 	// --- admin api + session auth (design/80 B-01/B-02/B-03/B-05/B-06) ---
 	sessions := adminauth.NewValkeySessionStore(rdb)
-	authHandler := adminauth.NewHandler(&pgUserStore{pool: pool.Pool}, sessions)
+	users := adminauth.NewPGUserStore(pool.Pool)
+	authHandler := adminauth.NewHandler(users, sessions)
 	adminSrv := adminapi.NewServer(
 		adminapi.NewPGTenantRepo(pool.Pool),
 		adminapi.NewPGDeviceRepo(pool.Pool),
 		adminapi.NewPGApiKeyRepo(pool.Pool),
 		sessions)
+	adminSrv.Authorization = users
 	adminSrv.KEK = kek
 	adminSrv.AuditQuery = newPGAuditQueryRepo(pool.Pool)
 	adminSrv.Tools = &pgToolRepo{pool: pool.Pool}

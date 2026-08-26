@@ -259,7 +259,7 @@ func (h *OIDCHandler) handleCallback(w http.ResponseWriter, r *http.Request) {
 		writeInternal(w, r)
 		return
 	}
-	if user == nil || user.Status != userStatusActive {
+	if !validLoginSnapshot(user) {
 		writeOIDCLoginFailed(w, r)
 		return
 	}
@@ -270,7 +270,7 @@ func (h *OIDCHandler) handleCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	expiresAt := h.now().Add(h.sessionTTL)
-	sess := &Session{TokenHash: HashToken(token), UserID: user.ID, TenantID: user.TenantID, Roles: append([]string(nil), user.Roles...), ExpiresAt: expiresAt}
+	sess := &Session{TokenHash: HashToken(token), UserID: user.ID, TenantID: user.TenantID, AuthzVersion: user.AuthzVersion, Roles: append([]string(nil), user.Roles...), ExpiresAt: expiresAt}
 	if err := h.Sessions.Create(r.Context(), sess, h.sessionTTL); err != nil {
 		writeInternal(w, r)
 		return

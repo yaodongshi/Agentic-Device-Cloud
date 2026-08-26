@@ -22,7 +22,7 @@ volumes:
 
 services:
   postgres:
-    image: postgres:16-alpine
+    image: postgres:16-alpine@sha256:cf78e76683b9ca8c5733cbbdce6c9262b45b6767934dd0a95e671f9a0fc20685
     container_name: adc-postgres
     restart: unless-stopped
     environment:
@@ -60,7 +60,7 @@ services:
   # All ports bind to loopback only; Grafana is the human entry point at
   # http://127.0.0.1:19300 (admin / ${GF_ADMIN_PASSWORD:-adc_dev_only}).
   prometheus:
-    image: prom/prometheus:v3.2.1
+    image: prom/prometheus:v3.2.1@sha256:6927e0919a144aa7616fd0137d4816816d42f6b816de3af269ab065250859a62
     container_name: adc-prometheus
     restart: unless-stopped
     profiles: [observability]
@@ -78,7 +78,7 @@ services:
     networks: [adc-net]
 
   grafana:
-    image: grafana/grafana:11.6.2
+    image: grafana/grafana:11.6.2@sha256:a3464c5dadc2e16aaeb813aead8c852e81cc7bbfa851c66d96f016d5257b9848
     container_name: adc-grafana
     restart: unless-stopped
     profiles: [observability]
@@ -97,7 +97,7 @@ services:
     networks: [adc-net]
 
   loki:
-    image: grafana/loki:3.4.3
+    image: grafana/loki:3.4.3@sha256:5fe9fa99e9a747297cdf0239a5b25d192d8f668bd6505b09beef4dffcab5aac2
     container_name: adc-loki
     restart: unless-stopped
     profiles: [observability]
@@ -127,7 +127,7 @@ services:
   #   networks: [adc-net]
 
   valkey:
-    image: valkey/valkey:8-alpine
+    image: valkey/valkey:8-alpine@sha256:e0eb7c480958d32bdc4357a74bdd70653ae15f2f9b4c93c4a5a9fad1dc471c84
     container_name: adc-valkey
     restart: unless-stopped
     # SEC-06: ACL 落地——default 用户关闭，业务走专用 `adc` 用户
@@ -147,11 +147,33 @@ services:
       retries: 12
     networks: [adc-net]
 
+  runtime-guard:
+    image: alpine:3.20@sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc
+    container_name: adc-runtime-guard
+    restart: "no"
+    entrypoint: ["/bin/sh", "/opt/adc/runtime-guard.sh"]
+    environment:
+      ADC_ENV: ${ADC_ENV:-dev}
+      ADC_PG_PASSWORD: ${ADC_PG_PASSWORD:-adc_dev_only}
+      ADC_VALKEY_PASSWORD: ${ADC_VALKEY_PASSWORD:-adc_dev_only}
+      ADC_BOOTSTRAP_ADMIN_PASSWORD: ${ADC_BOOTSTRAP_ADMIN_PASSWORD:-}
+      ADC_BOOTSTRAP_DEVICE_SECRET: ${ADC_BOOTSTRAP_DEVICE_SECRET:-}
+      ADC_BOOTSTRAP_APPLICATION_SECRET: ${ADC_BOOTSTRAP_APPLICATION_SECRET:-}
+      ADC_DEVICE_KEK: ${ADC_DEVICE_KEK:-00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff}
+      ADC_NODE_KEY: ${ADC_NODE_KEY:-}
+      ADC_HITL_CALLBACK_KEY: ${ADC_HITL_CALLBACK_KEY:-}
+      ADC_CE_IMAGE: ${ADC_CE_IMAGE:-adc/ce:dev}
+      ADC_PY_AGENT_IMAGE: ${ADC_PY_AGENT_IMAGE:-adc/py-agent:dev}
+      ADC_CONSOLE_IMAGE: ${ADC_CONSOLE_IMAGE:-adc/console:dev}
+    volumes:
+      - ../scripts/runtime-guard.sh:/opt/adc/runtime-guard.sh:ro
+    networks: [adc-net]
+
   adc-migrate:
     build:
       context: ..
       dockerfile: Dockerfile.adc
-    image: ${ADC_IMAGE_PREFIX:-adc}/ce:${ADC_VERSION:-dev}
+    image: ${ADC_CE_IMAGE:-adc/ce:dev}
     container_name: adc-migrate
     restart: "no"
     entrypoint: ["/usr/local/bin/adc-migrate"]
@@ -163,7 +185,43 @@ services:
       PG_DBNAME: ${ADC_PG_DBNAME:-adc}
       PG_SSLMODE: disable
     depends_on:
+      runtime-guard:
+        condition: service_completed_successfully
       postgres:
+        condition: service_healthy
+    networks: [adc-net]
+
+  dev-seed:
+    profiles: [dev-seed]
+    build:
+      context: ..
+      dockerfile: Dockerfile.adc
+    image: ${ADC_CE_IMAGE:-adc/ce:dev}
+    container_name: adc-dev-seed
+    restart: "no"
+    command: ["-seed"]
+    environment:
+      ADC_ENV: ${ADC_ENV:-dev}
+      ADC_DEVICE_KEK: ${ADC_DEVICE_KEK:-00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff}
+      ADC_DEV_SEED_CNC_SECRET: ${ADC_DEV_SEED_CNC_SECRET:-}
+      ADC_DEV_SEED_AGV_SECRET: ${ADC_DEV_SEED_AGV_SECRET:-}
+      ADC_DEV_SEED_ADMIN_PASSWORD: ${ADC_DEV_SEED_ADMIN_PASSWORD:-}
+      ADC_DEV_SEED_TENANT_ADMIN_PASSWORD: ${ADC_DEV_SEED_TENANT_ADMIN_PASSWORD:-}
+      ADC_DEV_SEED_APPROVER_PASSWORD: ${ADC_DEV_SEED_APPROVER_PASSWORD:-}
+      ADC_DEV_SEED_AGENT_API_KEY: ${ADC_DEV_SEED_AGENT_API_KEY:-}
+      PG_HOST: postgres
+      PG_PORT: "5432"
+      PG_USER: ${ADC_PG_USER:-adc}
+      PG_PASSWORD: ${ADC_PG_PASSWORD:-adc_dev_only}
+      PG_DBNAME: ${ADC_PG_DBNAME:-adc}
+      PG_SSLMODE: disable
+      VALKEY_ADDR: valkey:6379
+      VALKEY_USERNAME: ${ADC_VALKEY_USERNAME:-adc}
+      VALKEY_PASSWORD: ${ADC_VALKEY_PASSWORD:-adc_dev_only}
+    depends_on:
+      adc-migrate:
+        condition: service_completed_successfully
+      valkey:
         condition: service_healthy
     networks: [adc-net]
 
@@ -171,10 +229,9 @@ services:
     build:
       context: ..
       dockerfile: Dockerfile.adc
-    image: ${ADC_IMAGE_PREFIX:-adc}/ce:${ADC_VERSION:-dev}
+    image: ${ADC_CE_IMAGE:-adc/ce:dev}
     container_name: adc-app
     restart: unless-stopped
-    command: ["-seed"]
     ports:
       - "127.0.0.1:18082:8080"
     environment:
@@ -183,6 +240,8 @@ services:
       ADC_HTTP_ADDR: ":8080"
       ADC_NODE_ID: adc-node-01
       ADC_DEVICE_KEK: ${ADC_DEVICE_KEK:-00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff}
+      ADC_NODE_KEY: ${ADC_NODE_KEY:-}
+      ADC_HITL_CALLBACK_KEY: ${ADC_HITL_CALLBACK_KEY:-}
       PG_HOST: postgres
       PG_PORT: "5432"
       PG_USER: ${ADC_PG_USER:-adc}
@@ -213,11 +272,17 @@ services:
     build:
       context: ..
       dockerfile: Dockerfile.pyagent
-    image: ${ADC_IMAGE_PREFIX:-adc}/py-agent:${ADC_VERSION:-dev}
+    image: ${ADC_PY_AGENT_IMAGE:-adc/py-agent:dev}
     container_name: adc-py-agent
     restart: unless-stopped
     environment:
       ADC_ADMIN_INTERNAL_URL: "http://adc:8080"
+      DATABASE_URL: postgres://${ADC_PG_USER:-adc}:${ADC_PG_PASSWORD:-adc_dev_only}@postgres:5432/${ADC_PG_DBNAME:-adc}?sslmode=disable
+    depends_on:
+      adc-migrate:
+        condition: service_completed_successfully
+      adc:
+        condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:18081/healthz')\" || exit 1"]
       interval: 10s
@@ -229,7 +294,7 @@ services:
     build:
       context: ..
       dockerfile: Dockerfile.console
-    image: ${ADC_IMAGE_PREFIX:-adc}/console:${ADC_VERSION:-dev}
+    image: ${ADC_CONSOLE_IMAGE:-adc/console:dev}
     container_name: adc-console
     restart: unless-stopped
     ports:
@@ -243,7 +308,7 @@ services:
     build:
       context: ..
       dockerfile: Dockerfile.adc
-    image: ${ADC_IMAGE_PREFIX:-adc}/ce:${ADC_VERSION:-dev}
+    image: ${ADC_CE_IMAGE:-adc/ce:dev}
     container_name: adc-gateway
     restart: unless-stopped
     entrypoint: ["/usr/local/bin/gateway"]

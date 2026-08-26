@@ -20,12 +20,18 @@ node -e '
   }
 ' "$VERSION"
 
-for image in ce py-agent console; do
-  grep -Fq "image: \${ADC_IMAGE_PREFIX:-adc}/$image:\${ADC_VERSION:-dev}" deploy/compose.yaml || {
-    echo "FAIL: Compose 镜像 $image 未使用统一 ADC_IMAGE_PREFIX/ADC_VERSION"
-    exit 1
-  }
-done
+grep -Fq 'image: ${ADC_CE_IMAGE:-adc/ce:dev}' deploy/compose.yaml || {
+  echo "FAIL: Compose CE 镜像未使用 ADC_CE_IMAGE"
+  exit 1
+}
+grep -Fq 'image: ${ADC_PY_AGENT_IMAGE:-adc/py-agent:dev}' deploy/compose.yaml || {
+  echo "FAIL: Compose Python Agent 镜像未使用 ADC_PY_AGENT_IMAGE"
+  exit 1
+}
+grep -Fq 'image: ${ADC_CONSOLE_IMAGE:-adc/console:dev}' deploy/compose.yaml || {
+  echo "FAIL: Compose Console 镜像未使用 ADC_CONSOLE_IMAGE"
+  exit 1
+}
 
 for image in ce py-agent console; do
   grep -Fq "/$image:sha-\${{ github.sha }}" .github/workflows/release.yml || {

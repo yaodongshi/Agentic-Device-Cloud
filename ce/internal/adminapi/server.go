@@ -129,10 +129,11 @@ type AdminOp struct {
 // Server wires the Admin API endpoints over the repository seams defined
 // per aggregate (design/31 3.4.2).
 type Server struct {
-	Tenants  TenantRepo
-	Devices  DeviceRepo
-	APIKeys  ApiKeyRepo
-	Sessions adminauth.SessionStore
+	Tenants       TenantRepo
+	Devices       DeviceRepo
+	APIKeys       ApiKeyRepo
+	Sessions      adminauth.SessionStore
+	Authorization adminauth.AuthorizationStore
 	// Tools persists adc_device_tools risk/enable configuration (B-04,
 	// FR-006); Policies persists the tenant approval policy (B-04,
 	// FR-007 V1 single-level subset); AuditQuery serves the audit log
@@ -179,6 +180,8 @@ type Server struct {
 	Market ToolPackageRepo
 	// Applications serves tenant developer application and credential lifecycle.
 	Applications DeveloperApplicationRepo
+	// A2ATasks applies tenant-scoped human decisions with PostgreSQL CAS.
+	A2ATasks A2ATaskDecisionRepo
 	// BudgetUsage prices the current month's metered fee for the C5.1
 	// budget status endpoint (design/83); nil fails the handler closed
 	// with 500 code 10007 until the assembly wires it.
@@ -196,11 +199,13 @@ type Server struct {
 
 // NewServer builds the Admin API server over the given repository seams.
 func NewServer(tenants TenantRepo, devices DeviceRepo, keys ApiKeyRepo, sessions adminauth.SessionStore) *Server {
+	authorization, _ := sessions.(adminauth.AuthorizationStore)
 	return &Server{
-		Tenants:  tenants,
-		Devices:  devices,
-		APIKeys:  keys,
-		Sessions: sessions,
+		Tenants:       tenants,
+		Devices:       devices,
+		APIKeys:       keys,
+		Sessions:      sessions,
+		Authorization: authorization,
 	}
 }
 
@@ -211,7 +216,7 @@ func NewServer(tenants TenantRepo, devices DeviceRepo, keys ApiKeyRepo, sessions
 // /v1/admin/* per the gateway prefix routing (design/31 3.5.1).
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
-	authz := adminauth.Authorize(s.Sessions)
+	authz := adminauth.Authorize(s.Sessions, s.Authorization)
 	admin := adminauth.RequireRole(adminauth.RoleAdmin)
 	// approver may read the device list per the design/33 1.2 matrix.
 	deviceRead := adminauth.RequireRole(adminauth.RoleAdmin, adminauth.RoleApprover)
@@ -269,6 +274,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /v1/admin/developer-applications/{applicationID}/credentials/revoke", authz(admin(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { s.mutateApplication(w, r, "revoke") }))))
 	mux.Handle("GET /v1/developer/connectivity", RequireApplicationScope(s.Applications, ApplicationScopeTasksRead, s.Audit)(http.HandlerFunc(s.handleApplicationConnectivity)))
 	mux.Handle("POST /v1/developer/introspection", http.HandlerFunc(s.handleApplicationIntrospection))
+	mux.Handle("POST /v1/admin/a2a/tasks/{taskID}/decision", authz(http.HandlerFunc(s.handleA2ATaskDecision)))
 
 	// auditor may read audit logs (design/33 1.2). The matrix in
 	// adminauth grants auditors GET/HEAD on /v1/admin/audit-logs only,

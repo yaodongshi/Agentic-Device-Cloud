@@ -3,165 +3,97 @@ package adminauth
 import (
 	"context"
 	"errors"
-	"regexp"
 	"testing"
 
-	"github.com/jackc/pgx/v5"
 	"github.com/pashagolub/pgxmock/v4"
 )
 
-// TestPGUserStoreGetByUsername covers the PG user loader: successful load
-// with role normalization, unknown username mapping, and role rows.
-func TestPGUserStoreGetByUsername(t *testing.T) {
+func TestPGUserStoreLoginSnapshots(t *testing.T) {
 	ctx := context.Background()
+	tests := []struct {
+		name string
+		oidc bool
+	}{
+		{name: "local"},
+		{name: "oidc", oidc: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m, err := pgxmock.NewPool()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer m.Close()
+			pattern := `(?s)SELECT u\.id::text.*LEFT JOIN adc_user_roles ur.*ur\.expires_at IS NULL OR ur\.expires_at > now\(\).*GROUP BY u\.id, t\.status`
+			expect := m.ExpectQuery(pattern)
+			if tt.oidc {
+				expect.WithArgs("https://idp.example", "subject")
+			} else {
+				expect.WithArgs("admin")
+			}
+			expect.WillReturnRows(pgxmock.NewRows([]string{"id", "username", "password_hash", "tenant_id", "user_status", "tenant_status", "authz_version", "roles"}).
+				AddRow("11111111-2222-3333-4444-555555555555", "admin", "hash", "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", "ACTIVE", "ACTIVE", int64(7), []string{"auditor", "tenant_admin"}))
 
-	t.Run("ok with role normalization", func(t *testing.T) {
-		m, err := pgxmock.NewPool()
-		if err != nil {
-			t.Fatalf("pgxmock.NewPool: %v", err)
-		}
-		defer m.Close()
-		m.ExpectQuery(regexp.QuoteMeta(`
-		SELECT id::text, username, COALESCE(password_hash, ''), tenant_id::text, status
-		  FROM adc_users
-		 WHERE username = $1 AND deleted_at IS NULL`)).
-			WithArgs("admin").
-			WillReturnRows(pgxmock.NewRows([]string{"id", "username", "password_hash", "tenant_id", "status"}).
-				AddRow("11111111-2222-3333-4444-555555555555", "admin", "$2a$10$hash", "t1", "ACTIVE"))
-		m.ExpectQuery(regexp.QuoteMeta(`
-		SELECT r.role_code
-		  FROM adc_user_roles ur
-		  JOIN adc_roles r ON r.id = ur.role_id
-		 WHERE ur.user_id = $1::uuid`)).
-			WithArgs("11111111-2222-3333-4444-555555555555").
-			WillReturnRows(pgxmock.NewRows([]string{"role_code"}).
-				AddRow("PLATFORM_ADMIN").
-				AddRow("AUDITOR"))
-		store := NewPGUserStore(m)
-		u, err := store.GetByUsername(ctx, "admin")
-		if err != nil {
-			t.Fatalf("GetByUsername: %v", err)
-		}
-		if u.ID != "11111111-2222-3333-4444-555555555555" || u.TenantID != "t1" || u.Status != "ACTIVE" {
-			t.Fatalf("unexpected user: %+v", u)
-		}
-		if len(u.Roles) != 2 || u.Roles[0] != "platform_admin" || u.Roles[1] != "auditor" {
-			t.Fatalf("roles must be normalized to lowercase: %v", u.Roles)
-		}
-		if err := m.ExpectationsWereMet(); err != nil {
-			t.Fatalf("unmet expectations: %v", err)
-		}
-	})
-
-	t.Run("unknown username", func(t *testing.T) {
-		m, err := pgxmock.NewPool()
-		if err != nil {
-			t.Fatalf("pgxmock.NewPool: %v", err)
-		}
-		defer m.Close()
-		m.ExpectQuery(regexp.QuoteMeta(`
-		SELECT id::text, username, COALESCE(password_hash, ''), tenant_id::text, status
-		  FROM adc_users
-		 WHERE username = $1 AND deleted_at IS NULL`)).
-			WithArgs("ghost").
-			WillReturnRows(pgxmock.NewRows([]string{"id", "username", "password_hash", "tenant_id", "status"}))
-		store := NewPGUserStore(m)
-		if _, err := store.GetByUsername(ctx, "ghost"); !errors.Is(err, ErrUserNotFound) {
-			t.Fatalf("want ErrUserNotFound, got %v", err)
-		}
-	})
-
-	t.Run("role query failure propagates", func(t *testing.T) {
-		m, err := pgxmock.NewPool()
-		if err != nil {
-			t.Fatalf("pgxmock.NewPool: %v", err)
-		}
-		defer m.Close()
-		m.ExpectQuery(regexp.QuoteMeta(`
-		SELECT id::text, username, COALESCE(password_hash, ''), tenant_id::text, status
-		  FROM adc_users
-		 WHERE username = $1 AND deleted_at IS NULL`)).
-			WithArgs("admin").
-			WillReturnRows(pgxmock.NewRows([]string{"id", "username", "password_hash", "tenant_id", "status"}).
-				AddRow("id-1", "admin", "h", "t1", "ACTIVE"))
-		m.ExpectQuery(regexp.QuoteMeta(`
-		SELECT r.role_code
-		  FROM adc_user_roles ur
-		  JOIN adc_roles r ON r.id = ur.role_id
-		 WHERE ur.user_id = $1::uuid`)).
-			WithArgs("id-1").
-			WillReturnError(errors.New("conn down"))
-		store := NewPGUserStore(m)
-		if _, err := store.GetByUsername(ctx, "admin"); err == nil {
-			t.Fatal("want role query error")
-		}
-	})
+			store := NewPGUserStore(m)
+			var user *User
+			if tt.oidc {
+				user, err = store.GetByOIDCIdentity(ctx, "https://idp.example", "subject")
+			} else {
+				user, err = store.GetByUsername(ctx, "admin")
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if user.AuthzVersion != 7 || user.TenantStatus != "ACTIVE" || len(user.Roles) != 2 || user.Roles[1] != "tenant_admin" {
+				t.Fatalf("snapshot = %+v", user)
+			}
+			if err := m.ExpectationsWereMet(); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
 }
 
-var _ = pgx.ErrNoRows
+func TestPGUserStoreUnknownAndFailure(t *testing.T) {
+	m, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Close()
+	m.ExpectQuery(`(?s)SELECT u\.id::text.*u\.username = \$1`).WithArgs("ghost").
+		WillReturnRows(pgxmock.NewRows([]string{"id", "username", "password_hash", "tenant_id", "user_status", "tenant_status", "authz_version", "roles"}))
+	if _, err := NewPGUserStore(m).GetByUsername(context.Background(), "ghost"); !errors.Is(err, ErrUserNotFound) {
+		t.Fatalf("error = %v, want ErrUserNotFound", err)
+	}
+}
 
-func TestPGUserStoreGetByOIDCIdentity(t *testing.T) {
+func TestPGAuthorizationStoreCurrentAuthorization(t *testing.T) {
 	ctx := context.Background()
-
-	t.Run("ok with roles", func(t *testing.T) {
+	t.Run("current roles use database expiry", func(t *testing.T) {
 		m, err := pgxmock.NewPool()
 		if err != nil {
-			t.Fatalf("pgxmock.NewPool: %v", err)
+			t.Fatal(err)
 		}
 		defer m.Close()
-		m.ExpectQuery(regexp.QuoteMeta(`
-		SELECT u.id::text, u.username, COALESCE(u.password_hash, ''), u.tenant_id::text, u.status
-		  FROM adc_oidc_identities i
-		  JOIN adc_users u ON u.id = i.user_id
-		 WHERE i.issuer = $1 AND i.subject = $2
-		   AND u.auth_source = 'OIDC' AND u.deleted_at IS NULL`)).
-			WithArgs("https://idp.example", "sub-oidc-1").
-			WillReturnRows(pgxmock.NewRows([]string{"id", "username", "password_hash", "tenant_id", "status"}).
-				AddRow("oidc-user-id", "sso@corp.com", "", "t1", "ACTIVE"))
-		m.ExpectQuery(regexp.QuoteMeta(`
-		SELECT r.role_code
-		  FROM adc_user_roles ur
-		  JOIN adc_roles r ON r.id = ur.role_id
-		 WHERE ur.user_id = $1::uuid`)).
-			WithArgs("oidc-user-id").
-			WillReturnRows(pgxmock.NewRows([]string{"role_code"}).
-				AddRow("TENANT_ADMIN"))
-		store := NewPGUserStore(m)
-		u, err := store.GetByOIDCIdentity(ctx, "https://idp.example", "sub-oidc-1")
-		if err != nil {
-			t.Fatalf("GetByOIDCIdentity: %v", err)
-		}
-		if u.ID != "oidc-user-id" || u.TenantID != "t1" || u.Status != "ACTIVE" {
-			t.Fatalf("unexpected user: %+v", u)
-		}
-		if u.PasswordHash != "" {
-			t.Fatalf("OIDC users must load an empty password hash, got %q", u.PasswordHash)
-		}
-		if len(u.Roles) != 1 || u.Roles[0] != "tenant_admin" {
-			t.Fatalf("roles must be normalized to lowercase: %v", u.Roles)
-		}
-		if err := m.ExpectationsWereMet(); err != nil {
-			t.Fatalf("unmet expectations: %v", err)
+		m.ExpectQuery(`(?s)SELECT u\.status.*LEFT JOIN adc_user_roles ur.*ur\.expires_at IS NULL OR ur\.expires_at > now\(\).*u\.id = \$1::uuid AND u\.tenant_id = \$2::uuid`).
+			WithArgs("11111111-2222-3333-4444-555555555555", "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee").
+			WillReturnRows(pgxmock.NewRows([]string{"user_status", "user_deleted", "tenant_status", "tenant_deleted", "authz_version", "roles"}).
+				AddRow("ACTIVE", false, "ACTIVE", false, int64(9), []string{"approver"}))
+		got, err := NewPGUserStore(m).CurrentAuthorization(ctx, "11111111-2222-3333-4444-555555555555", "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
+		if err != nil || got.AuthzVersion != 9 || len(got.Roles) != 1 || got.Roles[0] != "approver" {
+			t.Fatalf("snapshot=%+v err=%v", got, err)
 		}
 	})
 
-	t.Run("unknown subject", func(t *testing.T) {
+	t.Run("database error propagates", func(t *testing.T) {
 		m, err := pgxmock.NewPool()
 		if err != nil {
-			t.Fatalf("pgxmock.NewPool: %v", err)
+			t.Fatal(err)
 		}
 		defer m.Close()
-		m.ExpectQuery(regexp.QuoteMeta(`
-		SELECT u.id::text, u.username, COALESCE(u.password_hash, ''), u.tenant_id::text, u.status
-		  FROM adc_oidc_identities i
-		  JOIN adc_users u ON u.id = i.user_id
-		 WHERE i.issuer = $1 AND i.subject = $2
-		   AND u.auth_source = 'OIDC' AND u.deleted_at IS NULL`)).
-			WithArgs("https://idp.example", "sub-ghost").
-			WillReturnRows(pgxmock.NewRows([]string{"id", "username", "password_hash", "tenant_id", "status"}))
-		store := NewPGUserStore(m)
-		if _, err := store.GetByOIDCIdentity(ctx, "https://idp.example", "sub-ghost"); !errors.Is(err, ErrUserNotFound) {
-			t.Fatalf("want ErrUserNotFound, got %v", err)
+		m.ExpectQuery(`(?s)SELECT u\.status.*FROM adc_users`).WillReturnError(errors.New("postgres unavailable"))
+		if _, err := NewPGUserStore(m).CurrentAuthorization(ctx, "u", "t"); err == nil {
+			t.Fatal("expected database error")
 		}
 	})
 }

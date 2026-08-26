@@ -19,12 +19,28 @@ test.beforeEach(async ({ page }) => {
     },
     { token: 'e2e-token-abc123', user: JSON.stringify(sessionUser) },
   )
+  await page.route('**/v1/admin/auth/session*', async (route) => {
+    await route.fulfill({
+      json: {
+        user_id: sessionUser.userId,
+        display_name: sessionUser.displayName,
+        tenant_id: sessionUser.tenantId,
+        role: sessionUser.role,
+      },
+    })
+  })
+  await page.route('**/v1/admin/branding*', async (route) => {
+    await route.fulfill({ json: { title: 'ADC Console', logo_url: '', primary_color: '#2563eb', is_default: true } })
+  })
 })
 
 // One handler for the whole /v1/admin/devices tree; the console hits the
 // collection endpoint (list + register) and the per-device tools endpoint.
 async function mockDevicesApi(page: import('@playwright/test').Page) {
   let lastToolPatch: { headers: Record<string, string>; body: unknown } | null = null
+  await page.route('**/v1/admin/device-groups*', async (route) => {
+    await route.fulfill({ json: { items: [], total: 0, page: 1, page_size: 200 } })
+  })
   await page.route(/\/v1\/admin\/devices($|[/?])/, async (route) => {
     const url = new URL(route.request().url())
     const method = route.request().method()

@@ -116,13 +116,14 @@ class TokenMeter:
             decode_responses=False,
         )
 
-    def record(self, tenant_id: str, source: str, tokens: int) -> None:
+    def record(self, tenant_id: str, application_id: str, source: str, tokens: int) -> None:
         event = {
             "tenant_id": tenant_id,
             "kind": "TOKEN_USAGE",
             "source": source,
             "value": tokens,
             "unit": "token",
+            "meta": {"application_id": application_id},
             "occurred_at": _now_rfc3339(),
             "idempotency_key": str(uuid.uuid4()),
         }

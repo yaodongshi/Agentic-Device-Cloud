@@ -18,11 +18,12 @@ import (
 )
 
 const advisoryLockID int64 = 0x4144434d494752 // "ADCMIGR"
+const advisoryLockTimeout = 30 * time.Second
 const advisoryUnlockTimeout = 5 * time.Second
 
 var migrationName = regexp.MustCompile(`^(\d+)_([a-z0-9][a-z0-9_-]*)\.up\.sql$`)
 
-//go:embed *.up.sql
+//go:embed *.sql
 var embedded embed.FS
 
 // Migration is one ordered, forward-only schema change.
@@ -120,7 +121,9 @@ func run(ctx context.Context, connection conn, fsys fs.FS) (err error) {
 	if err != nil {
 		return err
 	}
-	if _, err = connection.Exec(ctx, `SELECT pg_advisory_lock($1)`, advisoryLockID); err != nil {
+	lockCtx, cancelLock := context.WithTimeout(ctx, advisoryLockTimeout)
+	defer cancelLock()
+	if _, err = connection.Exec(lockCtx, `SELECT pg_advisory_lock($1)`, advisoryLockID); err != nil {
 		return fmt.Errorf("migration: acquire advisory lock: %w", err)
 	}
 	defer func() {
@@ -169,6 +172,10 @@ func run(ctx context.Context, connection conn, fsys fs.FS) (err error) {
 		migrationTx, beginErr := connection.Begin(ctx)
 		if beginErr != nil {
 			return fmt.Errorf("migration %04d_%s: begin: %w", migration.Version, migration.Name, beginErr)
+		}
+		if _, execErr := migrationTx.Exec(ctx, `SET LOCAL lock_timeout = '10s'; SET LOCAL statement_timeout = '5min'`); execErr != nil {
+			_ = migrationTx.Rollback(ctx)
+			return fmt.Errorf("migration %04d_%s: set timeouts: %w", migration.Version, migration.Name, execErr)
 		}
 		if _, execErr := migrationTx.Exec(ctx, migration.SQL); execErr != nil {
 			_ = migrationTx.Rollback(ctx)

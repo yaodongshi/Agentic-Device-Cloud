@@ -18,6 +18,23 @@ const (
 	codeInternal     = "10007" // service internal error
 )
 
+const tenantStatusActive = "ACTIVE"
+
+var ErrAuthorizationInvalid = errors.New("adminauth: authorization snapshot invalid")
+
+type AuthorizationSnapshot struct {
+	UserStatus    string
+	UserDeleted   bool
+	TenantStatus  string
+	TenantDeleted bool
+	AuthzVersion  int64
+	Roles         []string
+}
+
+type AuthorizationStore interface {
+	CurrentAuthorization(ctx context.Context, userID, tenantID string) (*AuthorizationSnapshot, error)
+}
+
 const (
 	msgBadRequest   = "invalid request"
 	msgUnauthorized = "invalid or expired session"
@@ -182,7 +199,13 @@ func ExtractToken(r *http.Request) string {
 // injected into the request context for downstream handlers (same style as
 // agentauth.Authorize). Missing, unknown and expired sessions all answer
 // 401 code 10002; storage failures answer 500 code 10007.
-func Authorize(store SessionStore) func(http.Handler) http.Handler {
+func Authorize(store SessionStore, authorization ...AuthorizationStore) func(http.Handler) http.Handler {
+	var authz AuthorizationStore
+	if len(authorization) > 0 {
+		authz = authorization[0]
+	} else {
+		authz, _ = store.(AuthorizationStore)
+	}
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			token := ExtractToken(r)
@@ -199,10 +222,24 @@ func Authorize(store SessionStore) func(http.Handler) http.Handler {
 				}
 				return
 			}
+			tokenHash := HashToken(token)
+			if authz == nil {
+				_ = store.Delete(r.Context(), tokenHash)
+				writeUnauthorized(w, r)
+				return
+			}
+			snapshot, err := authz.CurrentAuthorization(r.Context(), sess.UserID, sess.TenantID)
+			if err != nil || snapshot == nil || snapshot.UserDeleted || snapshot.TenantDeleted ||
+				snapshot.UserStatus != userStatusActive || snapshot.TenantStatus != tenantStatusActive ||
+				snapshot.AuthzVersion <= 0 || snapshot.AuthzVersion != sess.AuthzVersion || len(snapshot.Roles) == 0 {
+				_ = store.Delete(r.Context(), tokenHash)
+				writeUnauthorized(w, r)
+				return
+			}
 			p := &Principal{
 				UserID:   sess.UserID,
 				TenantID: sess.TenantID,
-				Roles:    append([]string(nil), sess.Roles...),
+				Roles:    append([]string(nil), snapshot.Roles...),
 			}
 			next.ServeHTTP(w, r.WithContext(WithPrincipal(r.Context(), p)))
 		})

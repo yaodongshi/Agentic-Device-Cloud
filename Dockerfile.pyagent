@@ -3,16 +3,16 @@
 # stages: venv scripts hard-code their interpreter path, so the build stage
 # installs to /app/.venv and the final stage copies the whole /app.
 
-FROM python:3.14-slim AS build
+FROM python:3.14-slim@sha256:83ff1d245a3d57d04152252d3ef9cb361494d0b3395abd65a5ebe91c401c8e83 AS build
 ENV UV_NO_CACHE=1 UV_COMPILE_BYTECODE=1
-COPY --from=ghcr.io/astral-sh/uv:0.8.13 /uv /usr/local/bin/uv
+COPY --from=ghcr.io/astral-sh/uv:0.8.13@sha256:4de5495181a281bc744845b9579acf7b221d6791f99bcc211b9ec13f417c2853 /uv /usr/local/bin/uv
 WORKDIR /app
 COPY core-sdk/python/ /app/core-sdk/python/
 COPY ce/py-agent/ /app/ce/py-agent/
 WORKDIR /app/ce/py-agent
 RUN uv sync --frozen --no-dev --no-editable
 
-FROM python:3.14-slim
+FROM python:3.14-slim@sha256:83ff1d245a3d57d04152252d3ef9cb361494d0b3395abd65a5ebe91c401c8e83
 RUN useradd -u 10001 -m appuser
 COPY --from=build /app /app
 ENV PATH="/app/ce/py-agent/.venv/bin:$PATH" PYTHONPATH="/app/ce/py-agent"

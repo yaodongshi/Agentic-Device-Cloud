@@ -42,6 +42,8 @@ type mockSessionStore struct {
 	getErr     error
 	deleteErr  error
 	createdTTL time.Duration
+	authz      *AuthorizationSnapshot
+	authzErr   error
 }
 
 func newMockSessionStore() *mockSessionStore {
@@ -86,6 +88,25 @@ func (m *mockSessionStore) Delete(_ context.Context, tokenHash string) error {
 	return nil
 }
 
+func (m *mockSessionStore) CurrentAuthorization(_ context.Context, userID, tenantID string) (*AuthorizationSnapshot, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.authzErr != nil {
+		return nil, m.authzErr
+	}
+	if m.authz != nil {
+		copy := *m.authz
+		copy.Roles = append([]string(nil), m.authz.Roles...)
+		return &copy, nil
+	}
+	for _, s := range m.sessions {
+		if s.UserID == userID && s.TenantID == tenantID {
+			return &AuthorizationSnapshot{UserStatus: userStatusActive, TenantStatus: tenantStatusActive, AuthzVersion: s.AuthzVersion, Roles: append([]string(nil), s.Roles...)}, nil
+		}
+	}
+	return nil, ErrAuthorizationInvalid
+}
+
 // testUser builds an ACTIVE user whose password is testPassword, with the
 // given role list.
 func testUser(t *testing.T, username string, status string, roles ...string) *User {
@@ -100,6 +121,8 @@ func testUser(t *testing.T, username string, status string, roles ...string) *Us
 		PasswordHash: hash,
 		TenantID:     "t_1a2b3c4d",
 		Status:       status,
+		TenantStatus: tenantStatusActive,
+		AuthzVersion: 1,
 		Roles:        roles,
 	}
 }
@@ -158,6 +181,9 @@ func TestLoginSuccess(t *testing.T) {
 	}
 	if stored.UserID != "u_9f8e7d6c" || stored.TenantID != "t_1a2b3c4d" {
 		t.Fatalf("stored session = %+v, want user/tenant from the record", stored)
+	}
+	if stored.AuthzVersion != 1 {
+		t.Fatalf("stored authz version = %d, want 1", stored.AuthzVersion)
 	}
 	if len(stored.Roles) != 1 || stored.Roles[0] != "tenant_admin" {
 		t.Fatalf("stored session roles = %v, want [tenant_admin]", stored.Roles)

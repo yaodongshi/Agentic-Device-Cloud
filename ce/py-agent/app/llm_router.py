@@ -6,11 +6,12 @@ Mounted under /v2/agents/llm/* behind the unified gateway.
 from __future__ import annotations
 
 import os
-from typing import Any
+from typing import Annotated, Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
+from app.auth import ApplicationPrincipal, require_llm_invoke
 from app.llm import LLMRouter, Provider, ProviderError, TokenMeter, scrub_pii
 
 router = APIRouter(prefix="/v2/agents/llm", tags=["llm"])
@@ -20,7 +21,7 @@ class ChatRequest(BaseModel):
     model: str | None = None
     messages: list[dict[str, Any]]
     tenant_id: str | None = Field(
-        default=None, description="billing scope (authenticated upstream)"
+        default=None, description="ignored; billing scope comes from authentication"
     )
     stream: bool = False
 
@@ -58,7 +59,9 @@ _meter = TokenMeter(
 
 
 @router.get("/models")
-def models() -> dict[str, Any]:
+def models(
+    _principal: Annotated[ApplicationPrincipal, Depends(require_llm_invoke)],
+) -> dict[str, Any]:
     return {
         "providers": [
             {"name": _router.primary.name, "model": _router.primary.model},
@@ -72,7 +75,10 @@ def models() -> dict[str, Any]:
 
 
 @router.post("/chat/completions", response_model=ChatResponse)
-async def chat(req: ChatRequest) -> ChatResponse:
+async def chat(
+    req: ChatRequest,
+    principal: Annotated[ApplicationPrincipal, Depends(require_llm_invoke)],
+) -> ChatResponse:
     if req.stream:
         raise HTTPException(status_code=400, detail="stream=true is not supported in V1")
     if not req.messages:
@@ -82,8 +88,7 @@ async def chat(req: ChatRequest) -> ChatResponse:
         text, usage, provider = await _router.complete(messages)
     except ProviderError as e:
         raise HTTPException(status_code=502, detail=str(e)) from e
-    if req.tenant_id:
-        _meter.record(req.tenant_id, provider, usage.total)
+    _meter.record(principal.tenant_id, principal.application_id, provider, usage.total)
     return ChatResponse(
         provider=provider,
         content=text,
@@ -96,8 +101,14 @@ async def chat(req: ChatRequest) -> ChatResponse:
 
 
 @router.get("/usage")
-def usage(tenant_id: str) -> dict[str, Any]:
+def usage(
+    principal: Annotated[ApplicationPrincipal, Depends(require_llm_invoke)],
+) -> dict[str, Any]:
     # Aggregated usage lives in adc_usage_events (Go billing engine, B3);
     # this endpoint is a thin forwarder placeholder until the billing API
     # is mounted here or proxied.
-    return {"tenant_id": tenant_id, "aggregated": "via /v1/admin/billing/statements"}
+    return {
+        "tenant_id": principal.tenant_id,
+        "application_id": principal.application_id,
+        "aggregated": "via /v1/admin/billing/statements",
+    }

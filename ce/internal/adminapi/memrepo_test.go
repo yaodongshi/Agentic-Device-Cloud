@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -931,8 +932,9 @@ func (r *memImportJobRepo) Get(ctx context.Context, jobID string) (*ImportJob, e
 // --- session store / audit sink / test harness ---
 
 type memSessions struct {
-	mu sync.Mutex
-	m  map[string]*adminauth.Session
+	mu      sync.Mutex
+	m       map[string]*adminauth.Session
+	current map[string]*adminauth.AuthorizationSnapshot
 }
 
 func (s *memSessions) Create(ctx context.Context, sess *adminauth.Session, ttl time.Duration) error {
@@ -944,6 +946,10 @@ func (s *memSessions) Create(ctx context.Context, sess *adminauth.Session, ttl t
 	cp := *sess
 	cp.Roles = append([]string(nil), sess.Roles...)
 	s.m[sess.TokenHash] = &cp
+	if s.current == nil {
+		s.current = map[string]*adminauth.AuthorizationSnapshot{}
+	}
+	s.current[sess.UserID+"\x00"+sess.TenantID] = &adminauth.AuthorizationSnapshot{UserStatus: "ACTIVE", TenantStatus: "ACTIVE", AuthzVersion: sess.AuthzVersion, Roles: append([]string(nil), sess.Roles...)}
 	return nil
 }
 
@@ -964,6 +970,18 @@ func (s *memSessions) Delete(ctx context.Context, tokenHash string) error {
 	defer s.mu.Unlock()
 	delete(s.m, tokenHash)
 	return nil
+}
+
+func (s *memSessions) CurrentAuthorization(ctx context.Context, userID, tenantID string) (*adminauth.AuthorizationSnapshot, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	snapshot := s.current[userID+"\x00"+tenantID]
+	if snapshot != nil {
+		copy := *snapshot
+		copy.Roles = append([]string(nil), snapshot.Roles...)
+		return &copy, nil
+	}
+	return nil, adminauth.ErrAuthorizationInvalid
 }
 
 type memAudit struct {
@@ -999,7 +1017,7 @@ type testEnv struct {
 func newTestEnv(t *testing.T) *testEnv {
 	t.Helper()
 	st := newMemStore()
-	sess := &memSessions{m: map[string]*adminauth.Session{}}
+	sess := &memSessions{m: map[string]*adminauth.Session{}, current: map[string]*adminauth.AuthorizationSnapshot{}}
 	aud := &memAudit{}
 	srv := NewServer(st.tenants, st.devices, st.keys, sess)
 	srv.Audit = aud
@@ -1024,13 +1042,29 @@ func (e *testEnv) token(t *testing.T, roles []string, tenantID string) string {
 	if err != nil {
 		t.Fatalf("adminauth.NewToken: %v", err)
 	}
-	e.sessions.m[adminauth.HashToken(tok)] = &adminauth.Session{
-		TokenHash: adminauth.HashToken(tok),
-		UserID:    uuidOf(900000),
-		TenantID:  tenantID,
-		Roles:     roles,
-		ExpiresAt: fixedNow.Add(time.Hour),
+	userNumber := 900099
+	if slices.Contains(roles, rolePlatformAdmin) {
+		userNumber = 900000
+	} else if slices.Contains(roles, "tenant_admin") {
+		userNumber = 900000
+	} else if slices.Contains(roles, "approver") {
+		userNumber = 900002
+	} else if slices.Contains(roles, "auditor") {
+		userNumber = 900003
 	}
+	userID := uuidOf(userNumber)
+	if e.sessions.current == nil {
+		e.sessions.current = map[string]*adminauth.AuthorizationSnapshot{}
+	}
+	e.sessions.m[adminauth.HashToken(tok)] = &adminauth.Session{
+		TokenHash:    adminauth.HashToken(tok),
+		UserID:       userID,
+		TenantID:     tenantID,
+		AuthzVersion: 1,
+		Roles:        roles,
+		ExpiresAt:    fixedNow.Add(time.Hour),
+	}
+	e.sessions.current[userID+"\x00"+tenantID] = &adminauth.AuthorizationSnapshot{UserStatus: "ACTIVE", TenantStatus: "ACTIVE", AuthzVersion: 1, Roles: append([]string(nil), roles...)}
 	return tok
 }
 

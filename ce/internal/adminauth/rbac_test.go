@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 	"time"
 
@@ -104,11 +105,12 @@ func TestAuthorize(t *testing.T) {
 	})
 
 	validSess := &Session{
-		TokenHash: HashToken("valid-token"),
-		UserID:    "u_9f8e7d6c",
-		TenantID:  "t_1a2b3c4d",
-		Roles:     []string{"tenant_admin"},
-		ExpiresAt: timeNowPlus(time.Hour),
+		TokenHash:    HashToken("valid-token"),
+		UserID:       "u_9f8e7d6c",
+		TenantID:     "t_1a2b3c4d",
+		AuthzVersion: 1,
+		Roles:        []string{"tenant_admin"},
+		ExpiresAt:    timeNowPlus(time.Hour),
 	}
 
 	tests := []struct {
@@ -210,6 +212,71 @@ func TestAuthorize(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestAuthorizeRevalidatesCurrentSnapshot(t *testing.T) {
+	validSession := &Session{TokenHash: HashToken("token"), UserID: "u1", TenantID: "t1", AuthzVersion: 4, Roles: []string{"tenant_admin"}, ExpiresAt: time.Now().Add(time.Hour)}
+	tests := []struct {
+		name     string
+		snapshot *AuthorizationSnapshot
+		err      error
+		status   int
+		role     string
+	}{
+		{name: "current role replaces session role", snapshot: &AuthorizationSnapshot{UserStatus: "ACTIVE", TenantStatus: "ACTIVE", AuthzVersion: 4, Roles: []string{"auditor"}}, status: http.StatusOK, role: "auditor"},
+		{name: "disabled", snapshot: &AuthorizationSnapshot{UserStatus: "DISABLED", TenantStatus: "ACTIVE", AuthzVersion: 4, Roles: []string{"tenant_admin"}}, status: http.StatusUnauthorized},
+		{name: "locked", snapshot: &AuthorizationSnapshot{UserStatus: "LOCKED", TenantStatus: "ACTIVE", AuthzVersion: 4, Roles: []string{"tenant_admin"}}, status: http.StatusUnauthorized},
+		{name: "deleted", snapshot: &AuthorizationSnapshot{UserStatus: "ACTIVE", UserDeleted: true, TenantStatus: "ACTIVE", AuthzVersion: 4, Roles: []string{"tenant_admin"}}, status: http.StatusUnauthorized},
+		{name: "tenant suspended", snapshot: &AuthorizationSnapshot{UserStatus: "ACTIVE", TenantStatus: "SUSPENDED", AuthzVersion: 4, Roles: []string{"tenant_admin"}}, status: http.StatusUnauthorized},
+		{name: "version mismatch after revoke", snapshot: &AuthorizationSnapshot{UserStatus: "ACTIVE", TenantStatus: "ACTIVE", AuthzVersion: 5, Roles: []string{"auditor"}}, status: http.StatusUnauthorized},
+		{name: "all roles expired", snapshot: &AuthorizationSnapshot{UserStatus: "ACTIVE", TenantStatus: "ACTIVE", AuthzVersion: 4}, status: http.StatusUnauthorized},
+		{name: "postgres failure", err: errors.New("postgres unavailable"), status: http.StatusUnauthorized},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sessions := newMockSessionStore()
+			sessions.sessions[validSession.TokenHash] = validSession
+			sessions.authz, sessions.authzErr = tt.snapshot, tt.err
+			handler := Authorize(sessions)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				p, _ := FromContext(r.Context())
+				if tt.role != "" && (len(p.Roles) != 1 || p.Roles[0] != tt.role) {
+					t.Errorf("current roles = %v, want [%s]", p.Roles, tt.role)
+				}
+				w.WriteHeader(http.StatusOK)
+			}))
+			rec := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodGet, "/v1/admin/tenants", nil)
+			req.Header.Set("Authorization", "Bearer token")
+			handler.ServeHTTP(rec, req)
+			if rec.Code != tt.status {
+				t.Fatalf("status=%d want=%d body=%s", rec.Code, tt.status, rec.Body.String())
+			}
+			if tt.status != http.StatusOK {
+				if _, err := sessions.Get(context.Background(), validSession.TokenHash); !errors.Is(err, ErrSessionNotFound) {
+					t.Fatalf("invalid session was not deleted: %v", err)
+				}
+			}
+		})
+	}
+}
+
+func TestAuthorizeConcurrentRevalidation(t *testing.T) {
+	sessions := newMockSessionStore()
+	tokenHash := HashToken("race-token")
+	sessions.sessions[tokenHash] = &Session{TokenHash: tokenHash, UserID: "u1", TenantID: "t1", AuthzVersion: 1, Roles: []string{"tenant_admin"}, ExpiresAt: time.Now().Add(time.Hour)}
+	sessions.authz = &AuthorizationSnapshot{UserStatus: "ACTIVE", TenantStatus: "ACTIVE", AuthzVersion: 1, Roles: []string{"tenant_admin"}}
+	handler := Authorize(sessions)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }))
+	var wg sync.WaitGroup
+	for range 32 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			req := httptest.NewRequest(http.MethodGet, "/v1/admin/tenants", nil)
+			req.Header.Set("Authorization", "Bearer race-token")
+			handler.ServeHTTP(httptest.NewRecorder(), req)
+		}()
+	}
+	wg.Wait()
 }
 
 func TestRequireRole(t *testing.T) {
@@ -344,11 +411,12 @@ func TestRequireRole(t *testing.T) {
 // taken on the authenticated principal from the session store.
 func TestFullChain(t *testing.T) {
 	approverSess := &Session{
-		TokenHash: HashToken("approver-token"),
-		UserID:    "u_approver",
-		TenantID:  "t_1a2b3c4d",
-		Roles:     []string{"approver"},
-		ExpiresAt: timeNowPlus(time.Hour),
+		TokenHash:    HashToken("approver-token"),
+		UserID:       "u_approver",
+		TenantID:     "t_1a2b3c4d",
+		AuthzVersion: 1,
+		Roles:        []string{"approver"},
+		ExpiresAt:    timeNowPlus(time.Hour),
 	}
 	sessions := newMockSessionStore()
 	sessions.sessions[approverSess.TokenHash] = approverSess

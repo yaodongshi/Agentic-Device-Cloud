@@ -152,11 +152,12 @@ func TestValkeySessionStoreRoundTrip(t *testing.T) {
 
 	expires := time.Now().Add(time.Hour).Truncate(time.Second)
 	sess := &Session{
-		TokenHash: HashToken("secret-token"),
-		UserID:    "u_9f8e7d6c",
-		TenantID:  "t_1a2b3c4d",
-		Roles:     []string{"tenant_admin", "auditor"},
-		ExpiresAt: expires,
+		TokenHash:    HashToken("secret-token"),
+		UserID:       "u_9f8e7d6c",
+		TenantID:     "t_1a2b3c4d",
+		AuthzVersion: 7,
+		Roles:        []string{"tenant_admin", "auditor"},
+		ExpiresAt:    expires,
 	}
 	if err := store.Create(ctx, sess, SessionTTL); err != nil {
 		t.Fatalf("Create: %v", err)
@@ -166,7 +167,7 @@ func TestValkeySessionStoreRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
-	if got.UserID != sess.UserID || got.TenantID != sess.TenantID ||
+	if got.UserID != sess.UserID || got.TenantID != sess.TenantID || got.AuthzVersion != sess.AuthzVersion ||
 		got.TokenHash != sess.TokenHash || !got.ExpiresAt.Equal(expires) {
 		t.Fatalf("Get = %+v, want %+v", got, sess)
 	}

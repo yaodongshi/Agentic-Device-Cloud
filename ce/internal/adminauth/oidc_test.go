@@ -64,6 +64,15 @@ func (m *mockIdentityStore) GetByOIDCIdentity(_ context.Context, issuer, subject
 	return u, nil
 }
 
+func (m *mockIdentityStore) CurrentAuthorization(_ context.Context, userID, tenantID string) (*AuthorizationSnapshot, error) {
+	for _, user := range m.users {
+		if user.ID == userID && user.TenantID == tenantID {
+			return &AuthorizationSnapshot{UserStatus: user.Status, TenantStatus: user.TenantStatus, AuthzVersion: user.AuthzVersion, Roles: append([]string(nil), user.Roles...)}, nil
+		}
+	}
+	return nil, ErrAuthorizationInvalid
+}
+
 type memoryOIDCStates struct {
 	mu sync.Mutex
 	tx map[string]*OIDCTransaction
@@ -106,7 +115,7 @@ func buildOIDCTestHandler() (*Handler, *mockOIDCProvider, *memoryOIDCStates, *mo
 	issuer := "https://idp.example"
 	provider := &mockOIDCProvider{identity: &OIDCIdentity{Issuer: issuer, Subject: "known"}}
 	users := &mockIdentityStore{users: map[string]*User{issuer + "\x00known": {
-		ID: "u1", Username: "known", TenantID: "t1", Status: userStatusActive, Roles: []string{"tenant_admin"},
+		ID: "u1", Username: "known", TenantID: "t1", Status: userStatusActive, TenantStatus: tenantStatusActive, AuthzVersion: 1, Roles: []string{"tenant_admin"},
 	}}}
 	states := newMemoryOIDCStates()
 	sessions := newMockSessionStore()
@@ -204,6 +213,11 @@ func TestOIDCCallbackCreatesCookieOnlySession(t *testing.T) {
 	}
 	if sessionCookie == nil || !sessionCookie.HttpOnly || len(sessions.sessions) != 1 {
 		t.Fatalf("session cookie/store missing: %+v", sessionCookie)
+	}
+	for _, session := range sessions.sessions {
+		if session.AuthzVersion != 1 {
+			t.Fatalf("OIDC session authz version = %d, want 1", session.AuthzVersion)
+		}
 	}
 	provider.mu.Lock()
 	if provider.verifier == "" {

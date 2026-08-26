@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"sort"
@@ -334,6 +335,56 @@ func TestApplicationIntrospectionWriteScope(t *testing.T) {
 	}
 	if rec := introspect(env, app.Secret, ApplicationScopeTasksRead); rec.Code != http.StatusForbidden {
 		t.Fatalf("read with write-only status=%d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestApplicationScopeWhitelist(t *testing.T) {
+	allowed := []string{
+		ApplicationScopeTasksRead,
+		ApplicationScopeTasksWrite,
+		ApplicationScopeLLMInvoke,
+		ApplicationScopeEvalsRead,
+		ApplicationScopeEvalsWrite,
+	}
+	for _, scope := range allowed {
+		t.Run(scope, func(t *testing.T) {
+			scopes, ok := normalizeApplicationScopes([]string{scope, scope})
+			if !ok || len(scopes) != 1 || scopes[0] != scope {
+				t.Fatalf("scope %q rejected or not deduplicated: %v, %v", scope, scopes, ok)
+			}
+		})
+	}
+	for _, scope := range []string{"", "admin:write", "a2a.tasks:approve", "evals:admin"} {
+		t.Run("reject_"+scope, func(t *testing.T) {
+			if _, ok := normalizeApplicationScopes([]string{scope}); ok {
+				t.Fatalf("unknown or approval scope %q accepted", scope)
+			}
+		})
+	}
+}
+
+func TestApplicationCreationAndIntrospectionSupportAgentScopes(t *testing.T) {
+	env := newTestEnv(t)
+	wireApplications(env)
+	tenant := env.createTenant(t, "agent-scopes", "Agent Scopes", nil)
+	admin := env.token(t, []string{"tenant_admin"}, tenant.TenantID)
+	for index, scope := range []string{ApplicationScopeLLMInvoke, ApplicationScopeEvalsRead, ApplicationScopeEvalsWrite} {
+		t.Run(scope, func(t *testing.T) {
+			rec := env.do(http.MethodPost, "/v1/admin/developer-applications", admin, map[string]any{
+				"name": fmt.Sprintf("agent-scope-%d", index), "purpose": "Agent integration", "scopes": []string{scope},
+			})
+			if rec.Code != http.StatusCreated {
+				t.Fatalf("create scope %q status=%d body=%s", scope, rec.Code, rec.Body.String())
+			}
+			var app applicationResponse
+			env.decode(t, rec, &app)
+			if rec := introspect(env, app.Secret, scope); rec.Code != http.StatusOK {
+				t.Fatalf("scope %q introspection status=%d body=%s", scope, rec.Code, rec.Body.String())
+			}
+		})
+	}
+	if rec := introspect(env, "invalid", "a2a.tasks:approve"); rec.Code != http.StatusBadRequest {
+		t.Fatalf("machine approval scope status=%d body=%s", rec.Code, rec.Body.String())
 	}
 }
 

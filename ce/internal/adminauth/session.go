@@ -18,11 +18,12 @@ import (
 // only in the caller's cookie/bearer header; server-side storage keeps just
 // the SHA-256 token hash as the Valkey key (design/33 1.2, NFR-004).
 type Session struct {
-	TokenHash string    // hex SHA-256 of the bearer token, the Valkey key suffix
-	UserID    string    // adc_users.id
-	TenantID  string    // tenant bound to the user; authoritative tenant context (SEC-02)
-	Roles     []string  // design/33 3.1.18 role names
-	ExpiresAt time.Time // absolute expiry; enforced by Valkey TTL and re-checked on Get
+	TokenHash    string    // hex SHA-256 of the bearer token, the Valkey key suffix
+	UserID       string    // adc_users.id
+	TenantID     string    // tenant bound to the user; authoritative tenant context (SEC-02)
+	AuthzVersion int64     // adc_users.authz_version at session issuance
+	Roles        []string  // design/33 3.1.18 role names
+	ExpiresAt    time.Time // absolute expiry; enforced by Valkey TTL and re-checked on Get
 }
 
 // ErrSessionNotFound is returned by SessionStore.Get for an unknown or
@@ -82,10 +83,11 @@ func sessionKey(tokenHash string) string {
 // sessionValue is the JSON wire form stored in Valkey. TokenHash is not
 // stored; it is reconstructed from the lookup key on Get.
 type sessionValue struct {
-	UserID    string    `json:"user_id"`
-	TenantID  string    `json:"tenant_id"`
-	Roles     []string  `json:"roles"`
-	ExpiresAt time.Time `json:"expires_at"`
+	UserID       string    `json:"user_id"`
+	TenantID     string    `json:"tenant_id"`
+	AuthzVersion int64     `json:"authz_version"`
+	Roles        []string  `json:"roles"`
+	ExpiresAt    time.Time `json:"expires_at"`
 }
 
 // ValkeySessionStore implements SessionStore on Valkey via go-redis/v9.
@@ -104,10 +106,11 @@ func (s *ValkeySessionStore) Create(ctx context.Context, sess *Session, ttl time
 		return errors.New("adminauth: cannot create session without a token hash")
 	}
 	raw, err := json.Marshal(sessionValue{
-		UserID:    sess.UserID,
-		TenantID:  sess.TenantID,
-		Roles:     sess.Roles,
-		ExpiresAt: sess.ExpiresAt,
+		UserID:       sess.UserID,
+		TenantID:     sess.TenantID,
+		AuthzVersion: sess.AuthzVersion,
+		Roles:        sess.Roles,
+		ExpiresAt:    sess.ExpiresAt,
 	})
 	if err != nil {
 		return fmt.Errorf("adminauth: encode session: %w", err)
@@ -137,11 +140,12 @@ func (s *ValkeySessionStore) Get(ctx context.Context, tokenHash string) (*Sessio
 		return nil, ErrSessionNotFound
 	}
 	return &Session{
-		TokenHash: tokenHash,
-		UserID:    v.UserID,
-		TenantID:  v.TenantID,
-		Roles:     v.Roles,
-		ExpiresAt: v.ExpiresAt,
+		TokenHash:    tokenHash,
+		UserID:       v.UserID,
+		TenantID:     v.TenantID,
+		AuthzVersion: v.AuthzVersion,
+		Roles:        v.Roles,
+		ExpiresAt:    v.ExpiresAt,
 	}, nil
 }
 

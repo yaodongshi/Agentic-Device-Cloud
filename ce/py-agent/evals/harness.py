@@ -19,15 +19,17 @@ class EvalHarness:
     def __init__(self, suites_dir: Path, executor: ToolExecutor | None = None) -> None:
         self.suites_dir = suites_dir
         self._executor: ToolExecutor = executor or MockExecutor()
-        self._reports: dict[str, EvalReport] = {}
+        self._reports: dict[tuple[str, str, str], EvalReport] = {}
 
-    def run(self, spec: EvalRunSpec) -> EvalReport:
+    def run(
+        self, spec: EvalRunSpec, tenant_id: str = "local", application_id: str = "cli"
+    ) -> EvalReport:
         """Execute every case in the spec and store the resulting report."""
         run_id = uuid4().hex
         started_at = datetime.now(UTC).isoformat()
         results = [self._run_case(case) for case in spec.cases]
         report = build_report(run_id, spec.suite, started_at, results)
-        self._reports[run_id] = report
+        self._reports[(tenant_id, application_id, run_id)] = report
         return report
 
     def load_suite(self, name: str) -> EvalRunSpec:
@@ -38,9 +40,11 @@ class EvalHarness:
         """List suite names available in the configured suites directory."""
         return loader.list_suites(self.suites_dir)
 
-    def report(self, run_id: str) -> EvalReport | None:
+    def report(
+        self, run_id: str, tenant_id: str = "local", application_id: str = "cli"
+    ) -> EvalReport | None:
         """Return the stored report for run_id, or None if unknown."""
-        return self._reports.get(run_id)
+        return self._reports.get((tenant_id, application_id, run_id))
 
     def _run_case(self, case: EvalCaseSpec) -> EvalCaseResult:
         start = time.perf_counter()

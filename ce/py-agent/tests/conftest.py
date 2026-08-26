@@ -7,9 +7,13 @@ from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
+from app.auth import ApplicationPrincipal
 from app.main import create_app
 from evals.harness import EvalHarness
+from fastapi import Request
 from fastapi.testclient import TestClient
+
+from tests.task_store import MemoryTaskStore
 
 SMOKE_SUITE: dict = {
     "suite": "smoke",
@@ -37,5 +41,15 @@ def harness(suites_dir: Path) -> EvalHarness:
 
 @pytest.fixture
 def client(suites_dir: Path) -> Iterator[TestClient]:
-    with TestClient(create_app(suites_dir)) as test_client:
+    async def allow(_request: Request, scope: str) -> ApplicationPrincipal:
+        return ApplicationPrincipal(
+            active=True,
+            application_id="test-application",
+            tenant_id="test-tenant",
+            required_scope=scope,
+        )
+
+    with TestClient(
+        create_app(suites_dir, introspector=allow, task_store=MemoryTaskStore())
+    ) as test_client:
         yield test_client

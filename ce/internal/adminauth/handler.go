@@ -23,6 +23,8 @@ type User struct {
 	PasswordHash string   // bcrypt storage form (HashPassword)
 	TenantID     string   // tenant bound to the user (SEC-02)
 	Status       string   // adc_users.status: ACTIVE / DISABLED / LOCKED
+	TenantStatus string   // adc_tenants.status; ACTIVE is required for login
+	AuthzVersion int64    // authorization snapshot version
 	Roles        []string // design/33 3.1.18 role names, e.g. tenant_admin
 }
 
@@ -46,6 +48,7 @@ type UserStore interface {
 type Handler struct {
 	users      UserStore
 	sessions   SessionStore
+	authz      AuthorizationStore
 	sessionTTL time.Duration
 	now        func() time.Time
 
@@ -57,9 +60,14 @@ type Handler struct {
 // NewHandler builds the auth handler; the session TTL defaults to
 // SessionTTL (24h).
 func NewHandler(users UserStore, sessions SessionStore) *Handler {
+	authz, _ := users.(AuthorizationStore)
+	if authz == nil {
+		authz, _ = sessions.(AuthorizationStore)
+	}
 	return &Handler{
 		users:      users,
 		sessions:   sessions,
+		authz:      authz,
 		sessionTTL: SessionTTL,
 		now:        time.Now,
 	}
@@ -91,21 +99,10 @@ type currentSessionResponse struct {
 }
 
 func (h *Handler) handleCurrentSession(w http.ResponseWriter, r *http.Request) {
-	token := ExtractToken(r)
-	if token == "" {
-		writeUnauthorized(w, r)
-		return
-	}
-	sess, err := h.sessions.Get(r.Context(), HashToken(token))
-	if errors.Is(err, ErrSessionNotFound) {
-		writeUnauthorized(w, r)
-		return
-	}
-	if err != nil {
-		writeInternal(w, r)
-		return
-	}
-	httpx.WriteJSON(w, http.StatusOK, currentSessionResponse{UserID: sess.UserID, DisplayName: sess.UserID, TenantID: sess.TenantID, Role: primaryRole(sess.Roles)})
+	Authorize(h.sessions, h.authz)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		p, _ := FromContext(r.Context())
+		httpx.WriteJSON(w, http.StatusOK, currentSessionResponse{UserID: p.UserID, DisplayName: p.UserID, TenantID: p.TenantID, Role: primaryRole(p.Roles)})
+	})).ServeHTTP(w, r)
 }
 
 // loginRequest mirrors design/33 3.1.1. mfa_code is reserved for the EE MFA
@@ -169,7 +166,7 @@ func (h *Handler) handleLogin(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, http.StatusInternalServerError, codeInternal, msgInternal, httpx.TraceIDFrom(r))
 		return
 	}
-	if user == nil || user.Status != userStatusActive {
+	if !validLoginSnapshot(user) {
 		compareDummy(req.Password)
 		writeLoginFailed(w, r)
 		return
@@ -186,11 +183,12 @@ func (h *Handler) handleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	expiresAt := h.now().Add(h.sessionTTL)
 	sess := &Session{
-		TokenHash: HashToken(token),
-		UserID:    user.ID,
-		TenantID:  user.TenantID,
-		Roles:     append([]string(nil), user.Roles...),
-		ExpiresAt: expiresAt,
+		TokenHash:    HashToken(token),
+		UserID:       user.ID,
+		TenantID:     user.TenantID,
+		AuthzVersion: user.AuthzVersion,
+		Roles:        append([]string(nil), user.Roles...),
+		ExpiresAt:    expiresAt,
 	}
 	if err := h.sessions.Create(r.Context(), sess, h.sessionTTL); err != nil {
 		httpx.WriteError(w, http.StatusInternalServerError, codeInternal, msgInternal, httpx.TraceIDFrom(r))
@@ -213,6 +211,10 @@ func (h *Handler) handleLogin(w http.ResponseWriter, r *http.Request) {
 		Role:      primaryRole(user.Roles),
 		ExpiresAt: expiresAt,
 	})
+}
+
+func validLoginSnapshot(user *User) bool {
+	return user != nil && user.Status == userStatusActive && user.TenantStatus == tenantStatusActive && user.AuthzVersion > 0 && len(user.Roles) > 0
 }
 
 // handleLogout deletes the caller's session (identified by bearer token or

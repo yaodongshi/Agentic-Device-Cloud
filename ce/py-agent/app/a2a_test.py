@@ -4,8 +4,10 @@ from __future__ import annotations
 
 from fastapi import Request
 from fastapi.testclient import TestClient
+from tests.task_store import MemoryTaskStore
 
-from app.a2a import ApplicationPrincipal, Orchestrator, build_agent_card
+from app.a2a import Orchestrator, build_agent_card
+from app.auth import ApplicationPrincipal
 from app.main import create_app
 
 PRINCIPAL = ApplicationPrincipal(
@@ -67,9 +69,10 @@ def test_endpoints_flow() -> None:
             required_scope=scope,
         )
 
-    client = TestClient(create_app(introspector=allow))
+    client = TestClient(create_app(introspector=allow, task_store=MemoryTaskStore()))
     r = client.post(
         "/v2/agents/a2a/tasks",
+        headers={"Idempotency-Key": "endpoint-flow-1"},
         json={"task_type": "maintain", "goal": "change tool", "devices": ["cnc-01"]},
     )
     assert r.status_code == 202
@@ -80,10 +83,4 @@ def test_endpoints_flow() -> None:
     r3 = client.post(
         f"/v2/agents/a2a/tasks/{task['task_id']}/decision", json={"decision": "approve"}
     )
-    assert r3.status_code == 200
-    assert r3.json()["state"] == "completed"
-    # second decision conflicts
-    r4 = client.post(
-        f"/v2/agents/a2a/tasks/{task['task_id']}/decision", json={"decision": "approve"}
-    )
-    assert r4.status_code == 409
+    assert r3.status_code == 403

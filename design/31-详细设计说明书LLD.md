@@ -972,7 +972,7 @@ func run(ctx context.Context, srv *http.Server, bg *errgroup.Group) error {
 | hub/device_hub.go | 4.4 节 438-500 行 | 保留并改造 | Register 踢旧连接、Unregister 代际校验；key 改为 tenant+deviceCode | SEC-15/20 |
 | cluster/manager.go | 5.2 节 562-777 行 | 拆分改造 | RegisterDevice/Unregister 迁 Connector registry（TTL 续期）；RouteToolCall 迁 Agent API router（MessageBus 抽象 + 节点签名）；GetTenantAggregatedTools 迁 aggregate（结构化命名空间、gen 缓存）；本地执行器直连保留为快速路径 | SEC-06/14/20/24、GAP-11 |
 | hitl/models.go | 6.1 节 817-857 行 | 改造 | ApprovalTicket 迁 PG 聚合根（对齐 design/32 adc_approval_tickets，增加 version/decided_at 等）；RiskLevel 常量保留 | SEC-08/11 |
-| hitl/manager.go | 6.2 节 861-1009 行 | 废弃重写 | Redis 主存废弃（SEC-08）；读改写竞态废弃（CAS）；等待逻辑迁 Agent API hitl client；唤醒通道统一订阅（SEC-10）；过期校验入 CAS 守卫（SEC-11） | SEC-08/10/11 |
+| hitl/manager.go | 6.2 节 861-1009 行 | 废弃重写 | 历史 Redis 主存方案禁止采用（SEC-08）；读改写竞态废弃（CAS）；等待逻辑迁 Agent API hitl client；Valkey 唤醒通道统一订阅（SEC-10）；过期校验入 CAS 守卫（SEC-11） | SEC-08/10/11 |
 | hitl/notifiers.go | 6.3 节 1013-1125 行 | 改造 | 卡片结构保留；按钮 URL 加签名（SEC-13）；sendJSON 校验状态码 + 3 次退避重试 + 降级 + adc_notifications 记录（SEC-18）；文案 i18n、清除 emoji | SEC-13/18、GAP-16 |
 | gateway/handler.go | 7.1 节 1131-1355 行 | 废弃拆分 | 四端点分属四服务；CheckOrigin 白名单（SEC-04）；isHighRiskOperation 废弃改 DB risk_level（SEC-09）；硬编码 agent_id/approver 删除（SEC-21）；15 秒硬超时可配置（SEC-16）。注：方案 A 新增的统一 API 网关（3.5）为全新边界组件，与 PoC 单体网关无代码承接关系，不恢复本包业务逻辑 | SEC-01/02/04/09/16/21 |
 | main.go | 7.2 节 1359-1446 行 | 废弃 | 拆四 cmd 入口；flag 改环境变量（SEC-13）；http.Server 全量超时 + MaxBytesReader（SEC-19）；Valkey ACL/TLS 连接配置（SEC-06）；TLS 终结（SEC-05） | SEC-05/06/13/19 |
