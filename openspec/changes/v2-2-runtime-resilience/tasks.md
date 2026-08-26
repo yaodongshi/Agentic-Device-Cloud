@@ -72,4 +72,4 @@
 - [x] 9.5 演练保留 PostgreSQL/Valkey 卷并切回升级前不可变应用镜像的应用回滚；验证：不执行 down migration、不删除卷且回滚说明记录兼容结论（不超过 2 小时）
 - [x] 9.6 执行 OpenSpec `openspec validate v2-2-runtime-resilience --strict` 和全量文档矛盾扫描；验证：严格校验通过且无 Redis、企业版闭源、默认 seed 或机器自批等残留冲突表述（不超过 1 小时）
 - [x] 9.7 编写 V2.2 M9 验收报告，记录备份、迁移账本、既有卷数据、镜像 digest、runtime tests、全门禁、回滚与残余风险证据；验证：报告逐项映射六份 delta spec 且明确未创建 tag（不超过 2 小时）
-- [ ] 9.8 检查 `git status`、完整 diff 和最近提交后仅暂存本变更文件，提交到 `dev` 并推送远端 `dev`；验证：远端提交 SHA 与本地一致且未创建或推送任何 tag（不超过 1 小时）
+- [x] 9.8 检查 `git status`、完整 diff 和最近提交后仅暂存本变更文件，提交到 `dev` 并推送远端 `dev`；验证：远端提交 SHA 与本地一致且未创建或推送任何 tag（不超过 1 小时）
